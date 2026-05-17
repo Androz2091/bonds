@@ -324,18 +324,67 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 		}
 	}
 
-	// Cross-vault FK cleanup: a contact in another vault may have a
-	// ContactImportantDate whose contact_important_date_type_id points at one
-	// of THIS vault's ContactImportantDateType rows. That FK is nullable, so
-	// NULL it out rather than deleting the date row (which would destroy data
-	// in another vault). Step 2 already cleaned up rows for this vault's own
-	// contacts.
-	if err := tx.Unscoped().Model(&models.ContactImportantDate{}).
-		Where("contact_important_date_type_id IN (?)",
-			tx.Model(&models.ContactImportantDateType{}).Select("id").Where("vault_id = ?", vaultID),
-		).
-		Update("contact_important_date_type_id", nil).Error; err != nil {
-		return fmt.Errorf("null cross-vault ContactImportantDate.type_id: %w", err)
+	// --- Cross-vault FK cleanup ---
+	//
+	// Step 2 deletes child rows by contact_id IN (this vault's contacts), but a
+	// contact in ANOTHER vault may still hold a child row whose catalog FK
+	// points at one of THIS vault's catalog rows (e.g. a Main contact's
+	// QuickFact filed under a Core template). Those rows keep the catalog FK
+	// constraint alive and block Step 3's catalog deletes.
+	//
+	// For nullable FKs, NULL them — preserves the child row in the other vault.
+	// For NOT NULL FKs, hard-delete the cross-vault child row.
+
+	type nullCleanup struct {
+		instance, catalog interface{}
+		instanceFKCol     string
+	}
+	for _, n := range []nullCleanup{
+		// ContactImportantDate.contact_important_date_type_id → ContactImportantDateType (nullable)
+		{&models.ContactImportantDate{}, &models.ContactImportantDateType{}, "contact_important_date_type_id"},
+		// Contact.company_id → Company (nullable on Contact)
+		{&models.Contact{}, &models.Company{}, "company_id"},
+		// Contact.file_id → File (nullable on Contact)
+		{&models.Contact{}, &models.File{}, "file_id"},
+	} {
+		if err := tx.Unscoped().Model(n.instance).
+			Where(n.instanceFKCol+" IN (?)",
+				tx.Unscoped().Model(n.catalog).Select("id").Where("vault_id = ?", vaultID),
+			).
+			Update(n.instanceFKCol, nil).Error; err != nil {
+			return fmt.Errorf("null cross-vault %T.%s: %w", n.instance, n.instanceFKCol, err)
+		}
+	}
+
+	type deleteCleanup struct {
+		instance, catalog interface{}
+		instanceFKCol     string
+	}
+	for _, d := range []deleteCleanup{
+		// QuickFact.vault_quick_facts_template_id → VaultQuickFactsTemplate (NOT NULL)
+		{&models.QuickFact{}, &models.VaultQuickFactsTemplate{}, "vault_quick_facts_template_id"},
+		// MoodTrackingEvent.mood_tracking_parameter_id → MoodTrackingParameter (NOT NULL)
+		{&models.MoodTrackingEvent{}, &models.MoodTrackingParameter{}, "mood_tracking_parameter_id"},
+		// ContactLabel.label_id → Label (NOT NULL pivot)
+		{&models.ContactLabel{}, &models.Label{}, "label_id"},
+		// ContactGroup.group_id → Group (NOT NULL pivot)
+		{&models.ContactGroup{}, &models.Group{}, "group_id"},
+		// ContactCompany.company_id → Company (NOT NULL pivot)
+		{&models.ContactCompany{}, &models.Company{}, "company_id"},
+		// ContactAddress.address_id → Address (NOT NULL pivot)
+		{&models.ContactAddress{}, &models.Address{}, "address_id"},
+		// ContactLifeMetric.life_metric_id → LifeMetric (NOT NULL pivot)
+		{&models.ContactLifeMetric{}, &models.LifeMetric{}, "life_metric_id"},
+		// ContactLoan.loan_id → Loan (NOT NULL pivot)
+		{&models.ContactLoan{}, &models.Loan{}, "loan_id"},
+	} {
+		if err := tx.Unscoped().
+			Where(d.instanceFKCol+" IN (?)",
+				tx.Unscoped().Model(d.catalog).Select("id").Where("vault_id = ?", vaultID),
+			).
+			Delete(d.instance).Error; err != nil {
+			return fmt.Errorf("delete cross-vault %T by %s: %w", d.instance, d.instanceFKCol, err)
+		}
 	}
 
 	// --- Simple vault-level tables (no children of their own, or children already deleted) ---
