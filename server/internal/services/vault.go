@@ -324,6 +324,20 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 		}
 	}
 
+	// Cross-vault FK cleanup: a contact in another vault may have a
+	// ContactImportantDate whose contact_important_date_type_id points at one
+	// of THIS vault's ContactImportantDateType rows. That FK is nullable, so
+	// NULL it out rather than deleting the date row (which would destroy data
+	// in another vault). Step 2 already cleaned up rows for this vault's own
+	// contacts.
+	if err := tx.Unscoped().Model(&models.ContactImportantDate{}).
+		Where("contact_important_date_type_id IN (?)",
+			tx.Model(&models.ContactImportantDateType{}).Select("id").Where("vault_id = ?", vaultID),
+		).
+		Update("contact_important_date_type_id", nil).Error; err != nil {
+		return fmt.Errorf("null cross-vault ContactImportantDate.type_id: %w", err)
+	}
+
 	// --- Simple vault-level tables (no children of their own, or children already deleted) ---
 
 	vaultChildModels := []interface{}{
