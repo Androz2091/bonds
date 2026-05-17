@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"log"
+	"net/http"
 
 	"github.com/labstack/echo/v4"
 	"github.com/naiba/bonds/internal/dto"
@@ -160,7 +161,14 @@ func (h *VaultHandler) Delete(c echo.Context) error {
 		// without server logs. Log the wrapped step so operators can see which
 		// cascade step failed; the response stays generic.
 		log.Printf("ERROR: vault delete cascade failed (vault_id=%s): %v", vaultID, err)
-		return response.InternalError(c, "err.failed_to_delete_vault")
+		// DEBUG (simon-version only): surface the cascade error in the response.
+		return c.JSON(http.StatusInternalServerError, response.APIResponse{
+			Success: false,
+			Error: &response.APIError{
+				Code:    "INTERNAL_ERROR",
+				Message: "Failed to delete vault: " + err.Error(),
+			},
+		})
 	}
 	return response.NoContent(c)
 }
