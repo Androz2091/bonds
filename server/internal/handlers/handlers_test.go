@@ -1399,6 +1399,13 @@ func TestPetCreate_Success(t *testing.T) {
 	if !resp.Success {
 		t.Fatal("expected success=true")
 	}
+	var pet dto.PetResponse
+	if err := json.Unmarshal(resp.Data, &pet); err != nil {
+		t.Fatalf("failed to parse pet response: %v", err)
+	}
+	if pet.PetCategoryName != "Dog" {
+		t.Errorf("expected pet_category_name Dog, got %s", pet.PetCategoryName)
+	}
 }
 
 func TestPetList_Success(t *testing.T) {
@@ -1423,6 +1430,50 @@ func TestPetList_Success(t *testing.T) {
 	}
 	if len(items) != 2 {
 		t.Errorf("expected 2 pets, got %d", len(items))
+	}
+}
+
+func TestPetCategoriesList_Success(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "pet-categories@example.com")
+
+	rec := ts.doRequest(http.MethodGet, "/api/pet-categories", "", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	var categories []dto.PetCategoryResponse
+	if err := json.Unmarshal(resp.Data, &categories); err != nil {
+		t.Fatalf("failed to parse pet categories: %v", err)
+	}
+	if len(categories) == 0 {
+		t.Fatal("expected account pet categories")
+	}
+	if categories[0].Name != "Dog" {
+		t.Errorf("expected first category Dog, got %s", categories[0].Name)
+	}
+}
+
+func TestPetCreate_CrossAccountCategoryReturnsNotFound(t *testing.T) {
+	ts := setupTestServer(t)
+	token1, _ := ts.registerTestUser(t, "pet-cross-owner@example.com")
+	vault := ts.createTestVault(t, token1, "Pet Vault")
+	contact := ts.createTestContact(t, token1, vault.ID, "John")
+
+	_, otherAccount := ts.registerTestUser(t, "pet-cross-other-account@example.com")
+	otherAccountID := otherAccount.User.AccountID
+	var otherCategory struct{ ID uint }
+	if err := ts.db.Table("pet_categories").Where("account_id = ?", otherAccountID).Order("id ASC").Select("id").First(&otherCategory).Error; err != nil {
+		t.Fatalf("failed to load other account category: %v", err)
+	}
+
+	rec := ts.doRequest(http.MethodPost, "/api/vaults/"+vault.ID+"/contacts/"+contact.ID+"/pets", fmt.Sprintf(`{"name":"Buddy","pet_category_id":%d}`, otherCategory.ID), token1)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	if resp.Error == nil || resp.Error.Code != "NOT_FOUND" {
+		t.Fatalf("expected not found response, got %+v", resp.Error)
 	}
 }
 
@@ -1847,6 +1898,62 @@ func TestInvitation_Create_InvalidEmail(t *testing.T) {
 	resp := parseResponse(t, rec)
 	if resp.Success {
 		t.Fatal("expected success=false")
+	}
+}
+
+func TestInvitationAccept_PersistsAcceptLanguageLocaleWithoutSeeders(t *testing.T) {
+	ts := setupTestServer(t)
+	ts.e.Use(middleware.Locale())
+	token, auth := ts.registerTestUser(t, "invite-locale-owner@example.com")
+	vault := ts.createTestVault(t, token, "Locale Vault")
+
+	rec := ts.doRequest(http.MethodPost, "/api/settings/invitations",
+		`{"email":"invite-locale-member@example.com","permission":200}`, token)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create invitation: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var invitation models.Invitation
+	if err := ts.db.Where("email = ?", "invite-locale-member@example.com").First(&invitation).Error; err != nil {
+		t.Fatalf("load invitation: %v", err)
+	}
+
+	var gendersBefore int64
+	if err := ts.db.Model(&models.Gender{}).Where("account_id = ?", auth.User.AccountID).Count(&gendersBefore).Error; err != nil {
+		t.Fatalf("count genders before accept: %v", err)
+	}
+	var dateTypesBefore int64
+	if err := ts.db.Model(&models.ContactImportantDateType{}).Where("vault_id = ?", vault.ID).Count(&dateTypesBefore).Error; err != nil {
+		t.Fatalf("count date types before accept: %v", err)
+	}
+
+	acceptBody := fmt.Sprintf(`{"token":%q,"first_name":"Locale","last_name":"Member","password":"password123"}`, invitation.Token)
+	rec = ts.doRequestWithLocale(http.MethodPost, "/api/invitations/accept", acceptBody, "", "zh-CN")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("accept invitation: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var invitedUser models.User
+	if err := ts.db.Where("email = ?", "invite-locale-member@example.com").First(&invitedUser).Error; err != nil {
+		t.Fatalf("load invited user: %v", err)
+	}
+	if invitedUser.Locale != "zh" {
+		t.Fatalf("invited user locale = %q, want zh", invitedUser.Locale)
+	}
+
+	var gendersAfter int64
+	if err := ts.db.Model(&models.Gender{}).Where("account_id = ?", auth.User.AccountID).Count(&gendersAfter).Error; err != nil {
+		t.Fatalf("count genders after accept: %v", err)
+	}
+	if gendersAfter != gendersBefore {
+		t.Fatalf("gender seed count changed after invite accept: before=%d after=%d", gendersBefore, gendersAfter)
+	}
+	var dateTypesAfter int64
+	if err := ts.db.Model(&models.ContactImportantDateType{}).Where("vault_id = ?", vault.ID).Count(&dateTypesAfter).Error; err != nil {
+		t.Fatalf("count date types after accept: %v", err)
+	}
+	if dateTypesAfter != dateTypesBefore {
+		t.Fatalf("vault date type seed count changed after invite accept: before=%d after=%d", dateTypesBefore, dateTypesAfter)
 	}
 }
 

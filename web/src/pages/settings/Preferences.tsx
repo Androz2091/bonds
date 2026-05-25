@@ -19,6 +19,7 @@ import { api } from "@/api";
 import type { UserPreferences, APIError } from "@/api";
 import { formatContactName } from "@/utils/nameFormat";
 import type { ContactNameFields } from "@/utils/nameFormat";
+import i18n, { SUPPORTED_LANGUAGES, normalizeLanguageCode } from "@/i18n";
 
 const { Title, Text } = Typography;
 
@@ -29,30 +30,23 @@ const dateFormats = [
   { value: "MMM D, YYYY", label: "Jan 15, 2026" },
 ];
 
-const timezones = [
-  "UTC",
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "Europe/London",
-  "Europe/Paris",
-  "Europe/Berlin",
-  "Asia/Tokyo",
-  "Asia/Shanghai",
-  "Asia/Kolkata",
-  "Australia/Sydney",
-].map((tz) => ({ value: tz, label: tz }));
+// Pull the full IANA timezone list from the runtime rather than maintaining a
+// hardcoded subset — users in zones we forgot to enumerate (e.g. Africa/Cairo,
+// Pacific/Honolulu, half-hour offsets like Asia/Kolkata) can now pick their
+// own. Sorted alphabetically so the Select's search box is easy to scan.
+const timezones = (
+  typeof Intl.supportedValuesOf === "function"
+    ? Intl.supportedValuesOf("timeZone")
+    : ["UTC"]
+)
+  .slice()
+  .sort()
+  .map((tz: string) => ({ value: tz, label: tz }));
 
-const locales = [
-  { value: "en", label: "English" },
-  { value: "fr", label: "Français" },
-  { value: "de", label: "Deutsch" },
-  { value: "es", label: "Español" },
-  { value: "pt", label: "Português" },
-  { value: "zh", label: "中文" },
-  { value: "ja", label: "日本語" },
-];
+// Keep this in sync with `SUPPORTED_LANGUAGES` in `@/i18n`. Offering a locale
+// here that the i18n bundle does not load would persist a preference the UI
+// can never honor (it would silently fall back to English).
+const locales = SUPPORTED_LANGUAGES.map((l) => ({ value: l.code, label: l.label }));
 
 const mapSites = [
   { value: "google_maps", label: "Google Maps" },
@@ -107,8 +101,17 @@ export default function Preferences() {
   const updateMutation = useMutation({
     mutationFn: (values: Partial<UserPreferences>) =>
       api.preferences.preferencesUpdate(values),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["settings", "preferences"] });
+      // Apply the locale change immediately so the UI doesn't lag a reload
+      // behind the saved preference. Without this the user changes
+      // language → save → nothing visible happens until next page load.
+      if (variables.locale) {
+        const desired = normalizeLanguageCode(variables.locale);
+        if (i18n.language !== desired) {
+          void i18n.changeLanguage(desired);
+        }
+      }
       message.success(t("settings.preferences.saved"));
     },
     onError: (e: APIError) => message.error(e.message),

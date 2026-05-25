@@ -22,9 +22,10 @@ func NewPersonalizeService(db *gorm.DB) *PersonalizeService {
 }
 
 type entityConfig struct {
-	table    string
-	hasLabel bool
-	hasName  bool
+	table       string
+	hasLabel    bool
+	hasName     bool
+	hasPosition bool
 }
 
 var entityConfigs = map[string]entityConfig{
@@ -38,8 +39,8 @@ var entityConfigs = map[string]entityConfig{
 	"religions":          {table: "religions", hasName: true},
 	"gift-occasions":     {table: "gift_occasions", hasLabel: true},
 	"gift-states":        {table: "gift_states", hasLabel: true},
-	"group-types":        {table: "group_types", hasLabel: true},
-	"post-templates":     {table: "post_templates", hasLabel: true},
+	"group-types":        {table: "group_types", hasLabel: true, hasPosition: true},
+	"post-templates":     {table: "post_templates", hasLabel: true, hasPosition: true},
 	"relationship-types": {table: "relationship_group_types", hasName: true},
 	"templates":          {table: "templates", hasName: true},
 	"modules":            {table: "modules", hasName: true},
@@ -105,10 +106,32 @@ func (s *PersonalizeService) Create(accountID, entity string, req dto.Personaliz
 		val = req.Name
 	}
 
+	cols := fmt.Sprintf("account_id, %s", labelCol)
+	placeholders := "?, ?"
+	args := []interface{}{accountID, val}
+
+	if labelCol != nameCol {
+		cols += ", " + nameCol
+		placeholders += ", ?"
+		args = append(args, val)
+	}
+
+	if cfg.hasPosition {
+		var maxPos int
+		s.db.Raw(fmt.Sprintf("SELECT COALESCE(MAX(position), -1) FROM %s WHERE account_id = ?", cfg.table), accountID).Scan(&maxPos)
+		cols += ", position"
+		placeholders += ", ?"
+		args = append(args, maxPos+1)
+	}
+
 	now := time.Now()
+	cols += ", created_at, updated_at"
+	placeholders += ", ?, ?"
+	args = append(args, now, now)
+
 	result := s.db.Exec(
-		fmt.Sprintf("INSERT INTO %s (account_id, %s, %s, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", cfg.table, labelCol, nameCol),
-		accountID, val, val, now, now,
+		fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", cfg.table, cols, placeholders),
+		args...,
 	)
 	if result.Error != nil {
 		return nil, result.Error
@@ -231,6 +254,12 @@ var vaultSyncEntities = []syncableEntity{
 	{table: "life_event_categories", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id"},
 	{table: "life_event_types", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id", parentTable: "life_event_categories", parentJoinCol: "life_event_category_id"},
 	{table: "vault_quick_facts_templates", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id"},
+	// contact_important_date_types was historically absent from this list, which
+	// is why switching locales and clicking "Sync translations" left birthday /
+	// anniversary / wedding type labels frozen in whatever language the vault
+	// was created in. Adding label_translation_key on the model + this entry
+	// closes the loop.
+	{table: "contact_important_date_types", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id"},
 }
 
 func (s *PersonalizeService) SyncAllTranslations(accountID, locale string) error {

@@ -4,12 +4,23 @@
 
 Bonds 记录所有联系人相关变更的动态，提供完整的审计追踪：
 
-- 联系人创建、更新、删除
-- 笔记添加、编辑、移除
-- 提醒创建、触发
-- 任务、礼物、债务、活动等实体变更
+- 联系人创建、更新、删除。
+- 笔记添加、编辑、移除。
+- 提醒创建、触发。
+- 任务、礼物、债务、活动等实体变更。
 
 动态可通过 `GET /api/vaults/:vault_id/feed` 按 Vault 查看，展示谁在什么时间做了什么操作。
+
+## 个人访问令牌 {#个人访问令牌}
+
+Bonds 允许你创建个人访问令牌（Personal Access Token，简称 PAT，界面中也称 API 令牌）来进行安全的 API 访问和 DAV 同步：
+
+- **管理入口**：在 **设置 > API 令牌** 中管理你的令牌。
+- **创建令牌**：可以为令牌指定自定义描述以及可选的有效期。
+- **安全性**：令牌只会在创建时显示一次，请务必立即复制并妥善保管。
+- **使用场景**：在外部集成与 DAV 客户端中充当密码。如果账户启用了两步验证，CardDAV 和 CalDAV 同步时将无法使用主密码，必须使用个人访问令牌。
+- **AI Agent**：内置 [`/mcp` 端点](/zh/features/ai-agents) 可使用个人访问令牌作为 Bearer token。
+- **格式**：所有个人访问令牌均以 `bonds_` 为前缀，便于识别。
 
 ## 地理编码
 
@@ -20,7 +31,7 @@ Bonds 可以对地址进行地理编码以获取经纬度坐标。支持两个�
 | **Nominatim** | 免费（OSM） | 无需 API Key |
 | **LocationIQ** | 免费增值 | 需要 API Key |
 
-地址创建时异步进行地理编码。如果编码失败，地址仍会保存 — 只是坐标为空。
+地址创建时异步进行地理编码。如果编码失败，地址仍会保存，只是坐标为空。
 
 在管理面板中配置提供商和 API Key。
 
@@ -30,10 +41,10 @@ Bonds 可以对地址进行地理编码以获取经纬度坐标。支持两个�
 
 ### 设置步骤
 
-1. 通过 [@BotFather](https://t.me/BotFather) 创建一个 Telegram Bot
-2. 复制 Bot Token
-3. 在管理面板的 Telegram 设置中输入 Token
-4. 在用户设置中添加 Telegram 通知渠道，填入你的 Chat ID
+1. 通过 [@BotFather](https://t.me/BotFather) 创建一个 Telegram Bot。
+2. 复制 Bot Token。
+3. 在管理面板的 Telegram 设置中输入 Token。
+4. 在用户设置中添加 Telegram 通知渠道，填入你的 Chat ID。
 
 ### 获取 Chat ID
 
@@ -47,8 +58,8 @@ https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
 
 Bonds 前后端均支持英文和中文：
 
-- **前端**：React i18next，使用 `en.json` 和 `zh.json` 语言文件
-- **后端**：内嵌 JSON 语言文件，通过 `Accept-Language` 请求头解析
+- **前端**：React i18next，使用 `en.json` 和 `zh.json` 语言文件。
+- **后端**：内嵌 JSON 语言文件，通过 `Accept-Language` 请求头解析。
 
 语言根据浏览器设置自动检测，用户也可手动切换。
 
@@ -72,7 +83,7 @@ Bonds 包含全面的货币表（160+ 种货币），用于追踪债务和礼物
 
 Bonds 支持多种历法系统：
 
-- **公历** — 标准历法（默认）
-- **农历** — 传统中国农历，基于 `6tail/lunar-go`
+- **公历**：标准历法（默认）。
+- **农历**：传统中国农历，基于 `6tail/lunar-go`。
 
 历法系统使用转换器接口设计，便于扩展支持其他历法类型。

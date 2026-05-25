@@ -15,6 +15,7 @@ import (
 	"github.com/naiba/bonds/internal/models"
 	"github.com/naiba/bonds/internal/search"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const MonicaExportVersion = "1.0-preview.1"
@@ -210,7 +211,7 @@ func (s *MonicaImportService) Import(vaultID, userID string, data []byte) (*dto.
 
 func (s *MonicaImportService) importContact(
 	tx *gorm.DB, mc *MonicaContact, vaultID, accountID, userID string,
-	genderByUUID map[string]string, resp *dto.MonicaImportResponse,
+	genderByUUID map[string]MonicaGenderRef, resp *dto.MonicaImportResponse,
 ) (string, bool, error) {
 	var existingContact models.Contact
 	if err := tx.Where("vault_id = ? AND distant_uuid = ?", vaultID, mc.UUID).First(&existingContact).Error; err == nil {
@@ -220,10 +221,17 @@ func (s *MonicaImportService) importContact(
 
 	var genderID *uint
 	if mc.Properties.Gender != "" {
-		if genderName, ok := genderByUUID[mc.Properties.Gender]; ok {
+		if ref, ok := genderByUUID[mc.Properties.Gender]; ok {
 			var gender models.Gender
-			if err := tx.Where("account_id = ? AND name = ?", accountID, genderName).First(&gender).Error; err == nil {
+			// Try exact name match first (works when Monica and Bonds use
+			// the same locale), then fall back to the translation key which
+			// is locale-independent (M/F/O → seed.genders.*).
+			if tx.Where("account_id = ? AND name = ?", accountID, ref.Properties.Name).First(&gender).Error == nil {
 				genderID = &gender.ID
+			} else if key, ok := monicaTypeToKey[ref.Properties.Type]; ok {
+				if tx.Where("account_id = ? AND name_translation_key = ?", accountID, key).First(&gender).Error == nil {
+					genderID = &gender.ID
+				}
 			}
 		}
 	}
@@ -306,13 +314,23 @@ func (s *MonicaImportService) findOrCreateLabel(tx *gorm.DB, vaultID, name strin
 	if err == nil {
 		return &label, nil
 	}
+	// Race-safe insert: another concurrent import could create the same
+	// (vault_id, slug) between our SELECT above and CREATE below. The
+	// uniqueIndex on Label (vault_id, slug) makes the conflict deterministic;
+	// DoNothing lets us re-SELECT the winning row instead of bubbling up an
+	// error. Without this, duplicate labels accumulate under concurrent imports.
 	label = models.Label{
 		VaultID: vaultID,
 		Name:    name,
 		Slug:    slug,
 	}
-	if err := tx.Create(&label).Error; err != nil {
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&label).Error; err != nil {
 		return nil, err
+	}
+	if label.ID == 0 {
+		if err := tx.Where("vault_id = ? AND slug = ?", vaultID, slug).First(&label).Error; err != nil {
+			return nil, err
+		}
 	}
 	return &label, nil
 }
@@ -486,10 +504,12 @@ func (s *MonicaImportService) importTasks(
 				task.CompletedAt = &t
 			}
 		}
-		if err := tx.Create(&task).Error; err != nil {
-			continue
-		}
-		if err := tx.Create(&models.TaskContact{ContactTaskID: task.ID, ContactID: contactID}).Error; err != nil {
+		if err := tx.Transaction(func(itx *gorm.DB) error {
+			if err := itx.Create(&task).Error; err != nil {
+				return err
+			}
+			return itx.Create(&models.TaskContact{ContactTaskID: task.ID, ContactID: contactID}).Error
+		}); err != nil {
 			continue
 		}
 		resp.ImportedTasks++
@@ -924,12 +944,20 @@ func monicaRelationshipNameCandidates(monicaType string) []string {
 	return candidates
 }
 
-func buildGenderMap(refs []MonicaGenderRef) map[string]string {
-	m := make(map[string]string, len(refs))
+func buildGenderMap(refs []MonicaGenderRef) map[string]MonicaGenderRef {
+	m := make(map[string]MonicaGenderRef, len(refs))
 	for _, r := range refs {
-		m[r.UUID] = r.Properties.Name
+		m[r.UUID] = r
 	}
 	return m
+}
+
+// monicaTypeToKey maps Monica's canonical gender type codes to the Bonds
+// seeded gender translation keys, used as a locale-independent fallback.
+var monicaTypeToKey = map[string]string{
+	"M": "seed.genders.male",
+	"F": "seed.genders.female",
+	"O": "seed.genders.other",
 }
 
 func buildFieldTypeMap(refs []MonicaContactFieldTypeRef) map[string]MonicaContactFieldTypeRef {
@@ -1188,6 +1216,7 @@ type MonicaGenderRef struct {
 	UUID       string `json:"uuid"`
 	Properties struct {
 		Name string `json:"name"`
+		Type string `json:"type"`
 	} `json:"properties"`
 }
 

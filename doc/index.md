@@ -17,12 +17,18 @@ features:
   - icon: 👥
     title: Contact Management
     details: Full lifecycle management — notes, tasks, reminders, gifts, debts, activities, life events, pets, and more.
+  - icon: 📊
+    title: Vault Dashboard
+    details: 3-column dashboard featuring activity feeds, life events, mood recording, and upcoming task trackers.
   - icon: 🔒
     title: Multi-Vault Isolation
     details: Organize contacts into separate vaults with role-based access control (Manager / Editor / Viewer).
   - icon: 🔍
     title: Full-text Search
     details: Bleve-powered CJK-aware search across contacts and notes. Finds what you need instantly.
+  - icon: 🤖
+    title: AI Agent Access
+    details: Built-in /mcp endpoint for MCP clients, with capability discovery, vault search, resource reads, and API action execution under existing permissions.
   - icon: 📅
     title: CardDAV / CalDAV
     details: Sync contacts and calendars with Apple Contacts, Thunderbird, and other DAV clients.

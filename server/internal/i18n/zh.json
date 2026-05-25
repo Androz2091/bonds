@@ -74,6 +74,8 @@
   "err.failed_to_update_task": "更新任务失败",
   "err.failed_to_toggle_task": "切换任务状态失败",
   "err.failed_to_delete_task": "删除任务失败",
+  "err.invalid_task_status": "无效的任务状态",
+  "err.invalid_parent_task": "无效的父任务",
 
   "err.failed_to_list_calls": "获取通话列表失败",
   "err.failed_to_create_call": "创建通话记录失败",
@@ -108,9 +110,11 @@
   "err.failed_to_delete_loan": "删除借贷失败",
 
   "err.failed_to_list_pets": "获取宠物列表失败",
+  "err.failed_to_list_pet_categories": "获取宠物类别列表失败",
   "err.failed_to_create_pet": "创建宠物失败",
   "err.invalid_pet_id": "无效的宠物ID",
   "err.pet_not_found": "宠物未找到",
+  "err.pet_category_not_found": "宠物类别未找到",
   "err.failed_to_update_pet": "更新宠物失败",
   "err.failed_to_delete_pet": "删除宠物失败",
 
@@ -219,6 +223,12 @@
   "err.entity_not_found": "实体未找到",
   "err.failed_to_update_entity": "更新实体失败",
   "err.failed_to_delete_entity": "删除实体失败",
+  "err.invalid_csv_mapping": "列映射无效",
+  "err.failed_to_import_csv": "CSV 导入失败",
+  "err.file_required": "请上传文件",
+  "err.file_too_large": "文件超过 10 MB 大小限制",
+  "err.invalid_file_type": "仅接受 CSV 文件",
+  "err.failed_to_read_file": "无法读取上传的文件",
 
   "seed.genders.male": "男",
   "seed.genders.female": "女",
@@ -420,5 +430,17 @@
   "seed.task_statuses.in_progress": "进行中",
   "seed.task_statuses.done": "已完成",
   "seed.task_statuses.blocked": "受阻",
-  "seed.task_statuses.cancelled": "已取消"
+  "seed.task_statuses.cancelled": "已取消",
+
+  "email.verify.subject": "请验证你的邮箱",
+  "email.verify.body": "<h2>验证你的邮箱</h2>\n<p>请点击下面的链接以验证你的邮箱地址：</p>\n<p><a href=\"{{link}}\">验证邮箱</a></p>",
+  "email.invitation.subject": "你被邀请加入 Bonds",
+  "email.invitation.body": "<h2>你被邀请了！</h2>\n<p>有人邀请你加入一个 Bonds 账户。点击下面的链接接受邀请：</p>\n<p><a href=\"{{link}}\">接受邀请</a></p>\n<p>本邀请将在 7 天后过期。</p>",
+  "notification.channel.verify.subject": "验证你的通知渠道",
+  "notification.channel.verify.body": "<p>请点击下面的链接以验证你的通知渠道：</p><p><a href=\"{{link}}\">{{link}}</a></p>",
+  "notification.channel.test.subject": "测试通知",
+  "notification.channel.test.body": "<p>这是一条来自 Bonds 的测试通知。</p>",
+  "reminder.subject": "提醒：{{label}}",
+  "reminder.body": "<h2>提醒：{{label}}</h2><p>你有一条关于 <strong>{{contact}}</strong> 的提醒（<strong>{{date}}</strong>）。</p><p>{{label}}</p>",
+  "reminder.unknown_contact": "未知联系人"
 }

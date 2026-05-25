@@ -1,11 +1,11 @@
 package services
 
 import (
-	"fmt"
 	"log"
 	"time"
 
 	calendarPkg "github.com/naiba/bonds/internal/calendar"
+	"github.com/naiba/bonds/internal/i18n"
 	"github.com/naiba/bonds/internal/models"
 	"gorm.io/gorm"
 )
@@ -78,13 +78,27 @@ func (s *ReminderSchedulerService) processOne(scheduled *models.ContactReminderS
 		return
 	}
 
-	// Build notification content
-	contactName := buildContactName(&reminder.Contact)
-	subject := fmt.Sprintf("Reminder: %s", reminder.Label)
-	htmlBody := fmt.Sprintf(
-		`<h2>Reminder: %s</h2><p>You have a reminder for <strong>%s</strong>.</p><p>%s</p>`,
-		reminder.Label, contactName, reminder.Label,
-	)
+	// Build notification content. Pull the locale from the channel owner so a
+	// user who reads Chinese gets a Chinese reminder regardless of which
+	// language the server's HTTP request happened to carry. Falls back to "en"
+	// when the user isn't loaded (legacy callers) — i18n.T then returns the
+	// English text rather than the raw key.
+	locale := "en"
+	enableAltCalendar := false
+	if channel.User != nil {
+		if channel.User.Locale != "" {
+			locale = channel.User.Locale
+		}
+		enableAltCalendar = channel.User.EnableAlternativeCalendar
+	}
+	contactName := buildContactName(&reminder.Contact, locale)
+	dateStr := formatReminderDate(reminder, scheduled.ScheduledAt, enableAltCalendar)
+	subject := i18n.Tt(locale, "reminder.subject", map[string]string{"label": reminder.Label})
+	htmlBody := i18n.Tt(locale, "reminder.body", map[string]string{
+		"label":   reminder.Label,
+		"contact": contactName,
+		"date":    dateStr,
+	})
 
 	var sendErr error
 	switch channel.Type {
@@ -110,8 +124,11 @@ func (s *ReminderSchedulerService) processOne(scheduled *models.ContactReminderS
 		s.handleSuccess(scheduled, channel, reminder, subject, htmlBody, now)
 	}
 
-	// Reschedule if recurring
-	s.rescheduleIfRecurring(reminder, channel.ID, now)
+	// Reschedule if recurring. Hand the user's preferred timezone through so
+	// the next-occurrence's 09:00 lands at 09:00 their local time, not 09:00
+	// in whatever zone the server happens to run in.
+	loc := userLocation(channel.User)
+	s.rescheduleIfRecurring(reminder, channel.ID, now.In(loc), loc)
 }
 
 func (s *ReminderSchedulerService) handleSuccess(
@@ -178,7 +195,7 @@ func (s *ReminderSchedulerService) handleFailure(
 	}
 }
 
-func (s *ReminderSchedulerService) rescheduleIfRecurring(reminder *models.ContactReminder, channelID uint, now time.Time) {
+func (s *ReminderSchedulerService) rescheduleIfRecurring(reminder *models.ContactReminder, channelID uint, now time.Time, loc *time.Location) {
 	if reminder.Type == "one_time" {
 		return
 	}
@@ -205,7 +222,7 @@ func (s *ReminderSchedulerService) rescheduleIfRecurring(reminder *models.Contac
 	case "recurring_month":
 		nextSchedule = now.AddDate(0, freq, 0)
 	case "recurring_year":
-		if ns, ok := calcNextYearlySchedule(reminder, now); ok {
+		if ns, ok := calcNextYearlySchedule(reminder, now, loc); ok {
 			nextSchedule = ns
 		} else {
 			nextSchedule = now.AddDate(freq, 0, 0)
@@ -221,7 +238,7 @@ func (s *ReminderSchedulerService) rescheduleIfRecurring(reminder *models.Contac
 	})
 }
 
-func calcNextYearlySchedule(reminder *models.ContactReminder, now time.Time) (time.Time, bool) {
+func calcNextYearlySchedule(reminder *models.ContactReminder, now time.Time, loc *time.Location) (time.Time, bool) {
 	ct := calendarPkg.CalendarType(reminder.CalendarType)
 	if ct == "" || ct == calendarPkg.Gregorian {
 		return time.Time{}, false
@@ -242,10 +259,31 @@ func calcNextYearlySchedule(reminder *models.ContactReminder, now time.Time) (ti
 		log.Printf("[reminder-scheduler] calendar NextOccurrence failed: %v", err)
 		return time.Time{}, false
 	}
-	return time.Date(gd.Year, time.Month(gd.Month), gd.Day, 9, 0, 0, 0, now.Location()), true
+	// Materialize the next fire at 09:00 in the user's preferred timezone
+	// (passed through from processOne). Using `now.Location()` here was the
+	// bug — a server in UTC would schedule everyone at 09:00 UTC, which is
+	// 18:00 Asia/Tokyo or 04:00 America/New_York.
+	return time.Date(gd.Year, time.Month(gd.Month), gd.Day, 9, 0, 0, 0, loc), true
 }
 
-func buildContactName(contact *models.Contact) string {
+// userLocation returns the time.Location for the given user's saved
+// timezone preference, falling back to UTC if the user is nil, has no
+// timezone set, or the saved string fails to load. Callers should pass
+// this to any date math that ends up persisted (scheduled fire times,
+// reminder dates) so different users in the same vault don't all fire at
+// the server's wall-clock 09:00.
+func userLocation(user *models.User) *time.Location {
+	if user == nil || user.Timezone == nil || *user.Timezone == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(*user.Timezone)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
+func buildContactName(contact *models.Contact, locale string) string {
 	name := ""
 	if contact.FirstName != nil {
 		name = *contact.FirstName
@@ -257,7 +295,7 @@ func buildContactName(contact *models.Contact) string {
 		name += *contact.LastName
 	}
 	if name == "" {
-		name = "Unknown"
+		name = i18n.T(locale, "reminder.unknown_contact")
 	}
 	return name
 }

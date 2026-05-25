@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';
+import { apiUrl } from './api-base-url';
 
 async function registerAndSetup(page: import('@playwright/test').Page, prefix: string) {
   const email = `${prefix}-${Date.now()}@example.com`;
@@ -16,7 +17,7 @@ async function registerAndSetup(page: import('@playwright/test').Page, prefix: s
   await page.getByPlaceholder(/e\.g\. family/i).fill('Avatar Vault');
   await page.getByPlaceholder(/what is this vault/i).fill('test');
   await page.getByRole('button', { name: /create vault/i }).click();
-  await expect(page).toHaveURL(/\/vaults\/[^/]+$/, { timeout: 10000 });
+  await expect(page).toHaveURL(/\/vaults\/[a-f0-9-]{36}$/, { timeout: 10000 });
 
   // Issue #63: Dashboard 重写后 'View all contacts' 链接已移除，改用 URL 导航
   await page.goto(page.url().replace(/\/$/, '') + '/contacts');
@@ -86,7 +87,7 @@ test.describe('Avatar Display - Contact Detail', () => {
     const [, vid, cid] = match!;
 
     const token = await page.evaluate(() => localStorage.getItem('token'));
-    const resp = await page.request.get(`http://localhost:8080/api/vaults/${vid}/contacts/${cid}/avatar`, {
+    const resp = await page.request.get(apiUrl(`/vaults/${vid}/contacts/${cid}/avatar`), {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(resp.status()).toBe(200);

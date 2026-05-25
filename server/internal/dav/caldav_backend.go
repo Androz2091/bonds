@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-ical"
 	"github.com/emersion/go-webdav"
 	"github.com/emersion/go-webdav/caldav"
 	"github.com/google/uuid"
+
+	calendarPkg "github.com/naiba/bonds/internal/calendar"
 	"github.com/naiba/bonds/internal/models"
 	"gorm.io/gorm"
 )
@@ -160,14 +163,12 @@ func (b *CalDAVBackend) ListCalendarObjects(ctx context.Context, path string, _ 
 	var objects []caldav.CalendarObject
 
 	if len(contactIDs) > 0 {
-		// Get important dates
 		var dates []models.ContactImportantDate
 		if err := b.db.Preload("Contact").Where("contact_id IN ?", contactIDs).Find(&dates).Error; err != nil {
 			return nil, err
 		}
 
 		for i := range dates {
-			// Ensure UUID exists
 			if dates[i].UUID == nil || *dates[i].UUID == "" {
 				uid := uuid.New().String()
 				dates[i].UUID = &uid
@@ -175,29 +176,53 @@ func (b *CalDAVBackend) ListCalendarObjects(ctx context.Context, path string, _ 
 			}
 			objects = append(objects, *importantDateToCalendarObject(&dates[i], userID))
 		}
+	}
 
-		// Get tasks for any of these contacts via the m2m pivot, plus any
-		// vault-scoped standalone tasks (no assignees).
-		var tasks []models.ContactTask
-		if err := b.db.Distinct().
-			Joins("LEFT JOIN task_contacts tc ON tc.contact_task_id = contact_tasks.id").
-			Where("contact_tasks.vault_id = ? AND (tc.contact_id IN ? OR tc.contact_id IS NULL)", vaultID, contactIDs).
-			Find(&tasks).Error; err != nil {
-			return nil, err
+	// Tasks are vault-scoped and may have zero assignees (standalone), so
+	// list them independently of whether the vault has any contacts.
+	tasks, err := b.listVaultTasksForCalendar(vaultID, contactIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		if tasks[i].UUID == nil || *tasks[i].UUID == "" {
+			uid := uuid.New().String()
+			tasks[i].UUID = &uid
+			b.db.Model(&tasks[i]).Update("uuid", uid)
 		}
-
-		for i := range tasks {
-			// Ensure UUID exists
-			if tasks[i].UUID == nil || *tasks[i].UUID == "" {
-				uid := uuid.New().String()
-				tasks[i].UUID = &uid
-				b.db.Model(&tasks[i]).Update("uuid", uid)
-			}
-			objects = append(objects, *taskToCalendarObject(&tasks[i], userID))
-		}
+		objects = append(objects, *taskToCalendarObject(&tasks[i], userID))
 	}
 
 	return objects, nil
+}
+
+// listVaultTasksForCalendar returns every task in the vault that the
+// requesting user can see in their calendar feed: any task assigned to one
+// of the vault's contacts, plus every standalone (zero-assignee) task. The
+// LEFT JOIN with NOT EXISTS keeps standalone tasks regardless of whether
+// the contactIDs slice is empty.
+func (b *CalDAVBackend) listVaultTasksForCalendar(vaultID string, contactIDs []string) ([]models.ContactTask, error) {
+	var tasks []models.ContactTask
+	q := b.db.Model(&models.ContactTask{}).
+		Distinct().
+		Where("contact_tasks.vault_id = ?", vaultID)
+
+	standalone := `NOT EXISTS (
+		SELECT 1 FROM task_contacts tc WHERE tc.contact_task_id = contact_tasks.id
+	)`
+	if len(contactIDs) == 0 {
+		q = q.Where(standalone)
+	} else {
+		assigned := `EXISTS (
+			SELECT 1 FROM task_contacts tc
+			WHERE tc.contact_task_id = contact_tasks.id AND tc.contact_id IN ?
+		)`
+		q = q.Where("("+assigned+") OR ("+standalone+")", contactIDs)
+	}
+	if err := q.Find(&tasks).Error; err != nil {
+		return nil, err
+	}
+	return tasks, nil
 }
 
 func (b *CalDAVBackend) QueryCalendarObjects(ctx context.Context, path string, _ *caldav.CalendarQuery) ([]caldav.CalendarObject, error) {
@@ -336,10 +361,6 @@ func (b *CalDAVBackend) putTodo(_ context.Context, path string, comp *ical.Compo
 		}, nil
 	}
 
-	// Pick any contact in the vault to attach as the initial assignee; the
-	// user can adjust assignees later from the UI. Vault-level standalone
-	// tasks (no contact) are valid too — we still create the task even when
-	// the vault has no contacts.
 	var contact models.Contact
 	hasContact := b.db.Where("vault_id = ?", vaultID).First(&contact).Error == nil
 
@@ -355,13 +376,16 @@ func (b *CalDAVBackend) putTodo(_ context.Context, path string, comp *ical.Compo
 	if description != "" {
 		task.Description = &description
 	}
-	if err := b.db.Create(&task).Error; err != nil {
-		return nil, err
-	}
-	if hasContact {
-		if err := b.db.Create(&models.TaskContact{ContactTaskID: task.ID, ContactID: contact.ID}).Error; err != nil {
-			return nil, err
+	if err := b.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&task).Error; err != nil {
+			return err
 		}
+		if hasContact {
+			return tx.Create(&models.TaskContact{ContactTaskID: task.ID, ContactID: contact.ID}).Error
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return &caldav.CalendarObject{
@@ -392,13 +416,17 @@ func (b *CalDAVBackend) DeleteCalendarObject(ctx context.Context, path string) e
 		return b.db.Delete(&importantDate).Error
 	}
 
-	// Try task
 	var task models.ContactTask
 	if err := b.db.First(&task, "uuid = ?", objectID).Error; err == nil {
 		if err := b.verifyVaultAccess(userID, task.VaultID); err != nil {
 			return err
 		}
-		return b.db.Delete(&task).Error
+		return b.db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("contact_task_id = ?", task.ID).Delete(&models.TaskContact{}).Error; err != nil {
+				return err
+			}
+			return tx.Delete(&task).Error
+		})
 	}
 
 	return webdav.NewHTTPError(http.StatusNotFound, fmt.Errorf("calendar object not found"))
@@ -483,13 +511,27 @@ func buildCalendarFromImportantDate(d *models.ContactImportantDate) *ical.Calend
 	prop.Value = dtStart.Format("20060102")
 	event.Props.Set(prop)
 
-	if d.Year != nil {
+	// Recurrence: for Gregorian we emit a simple RRULE=YEARLY since the
+	// same Gregorian day every year is correct. For lunar (and any future
+	// non-Gregorian calendars), RRULE=YEARLY would silently drift — lunar
+	// dates land on a different Gregorian day each year — so we instead
+	// compute the next several Gregorian occurrences via the calendar
+	// converter and emit them as RDATE entries. This way Apple Calendar /
+	// Thunderbird / Google Calendar render the lunar birthday on the right
+	// day without needing lunar-calendar support of their own.
+	isAlternative := d.CalendarType != "" && d.CalendarType != "gregorian" && d.OriginalMonth != nil && d.OriginalDay != nil
+	if isAlternative {
+		ct := calendarPkg.CalendarType(d.CalendarType)
+		if converter, ok := calendarPkg.Get(ct); ok {
+			emitLunarRDates(event, converter, d, dtStart)
+		}
+	} else if d.Year != nil {
 		rruleProp := ical.NewProp(ical.PropRecurrenceRule)
 		rruleProp.Value = "FREQ=YEARLY"
 		event.Props.Set(rruleProp)
 	}
 
-	if d.CalendarType != "" && d.CalendarType != "gregorian" && d.OriginalMonth != nil && d.OriginalDay != nil {
+	if isAlternative {
 		desc := fmt.Sprintf("Calendar: %s, Original date: %d/%d", d.CalendarType, *d.OriginalMonth, *d.OriginalDay)
 		if d.OriginalYear != nil {
 			desc = fmt.Sprintf("Calendar: %s, Original date: %d-%d-%d", d.CalendarType, *d.OriginalYear, *d.OriginalMonth, *d.OriginalDay)
@@ -499,6 +541,46 @@ func buildCalendarFromImportantDate(d *models.ContactImportantDate) *ical.Calend
 
 	cal.Children = append(cal.Children, event)
 	return cal
+}
+
+// emitLunarRDates appends RDATE properties to a lunar VEVENT for the next
+// several years of Gregorian projections, derived from the original lunar
+// date. Without this, downstream CalDAV clients would either not recur at
+// all (no RRULE because we removed it) or — under the old code — recur on
+// the wrong Gregorian day every year.
+//
+// The 10-year horizon is a pragmatic balance: long enough for typical
+// calendar views (3-5 years) without bloating every VEVENT with decades of
+// projections. The DTSTART itself remains the canonical first occurrence;
+// RDATE entries supplement it.
+func emitLunarRDates(event *ical.Component, converter calendarPkg.Converter, d *models.ContactImportantDate, dtStart time.Time) {
+	const horizonYears = 10
+	startYear := dtStart.Year()
+	if d.OriginalYear != nil {
+		startYear = *d.OriginalYear
+	}
+
+	values := []string{}
+	for offset := 0; offset < horizonYears; offset++ {
+		orig := calendarPkg.DateInfo{
+			Day:   *d.OriginalDay,
+			Month: *d.OriginalMonth,
+			Year:  startYear + offset,
+		}
+		gd, err := converter.ToGregorian(orig)
+		if err != nil {
+			continue
+		}
+		values = append(values, fmt.Sprintf("%04d%02d%02d", gd.Year, gd.Month, gd.Day))
+	}
+	if len(values) == 0 {
+		return
+	}
+
+	rdateProp := ical.NewProp(ical.PropRecurrenceDates)
+	rdateProp.SetValueType(ical.ValueDate)
+	rdateProp.Value = strings.Join(values, ",")
+	event.Props.Set(rdateProp)
 }
 
 // buildCalendarFromTask creates an iCal VTODO from a ContactTask.

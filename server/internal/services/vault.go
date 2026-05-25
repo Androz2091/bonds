@@ -201,10 +201,19 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 			&models.QuickFact{},
 			&models.Note{}, // Note has both contact_id and vault_id; delete by contact_id here
 		}
-		// Hard-delete (Unscoped) is required: models like ContactImportantDate
-		// have soft-delete enabled, and a soft-deleted row keeps its FK to
-		// vault-scoped parent rows (e.g. ContactImportantDateType), which then
-		// blocks the parent delete in Step 3.
+		// Hard-delete (Unscoped) is required: soft-deletable child models
+		// (ContactImportantDate here; Group and ContactTask in the vault-scoped
+		// path further down) carry gorm.DeletedAt, so a regular Delete leaves
+		// the row in the table with its FKs to vault-scoped parents intact
+		// (e.g. contact_important_dates → contact_important_date_types).
+		// Postgres then rejects the parent delete in Step 3 with a foreign-key
+		// violation. A vault delete is intentionally destructive, so
+		// soft-delete is the wrong semantic here.
+		// NB: ContactTask is intentionally NOT in this list — since #107 it
+		// has no contact_id column (assignees live in the task_contacts pivot
+		// instead), so deleting by contact_id would be a SQL error. The
+		// dedicated ContactTask cascade further down handles tasks by id and
+		// drops the task_contacts pivot rows first to satisfy the FK.
 		for _, m := range contactChildModels {
 			if err := tx.Unscoped().Where("contact_id IN ?", contactIDs).Delete(m).Error; err != nil {
 				return fmt.Errorf("delete contact child %T: %w", m, err)
@@ -257,70 +266,105 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 
 	// Journal cascade: PostMetric → PostSection → PostTag → ContactPost → Post → SliceOfLife → JournalMetric → Journal
 	var journalIDs []uint
-	tx.Model(&models.Journal{}).Where("vault_id = ?", vaultID).Pluck("id", &journalIDs)
+	if err := tx.Model(&models.Journal{}).Where("vault_id = ?", vaultID).Pluck("id", &journalIDs).Error; err != nil {
+		return fmt.Errorf("pluck Journal ids: %w", err)
+	}
 	if len(journalIDs) > 0 {
 		var postIDs []uint
-		tx.Model(&models.Post{}).Where("journal_id IN ?", journalIDs).Pluck("id", &postIDs)
+		if err := tx.Model(&models.Post{}).Where("journal_id IN ?", journalIDs).Pluck("id", &postIDs).Error; err != nil {
+			return fmt.Errorf("pluck Post ids: %w", err)
+		}
 		if len(postIDs) > 0 {
-			tx.Where("post_id IN ?", postIDs).Delete(&models.PostMetric{})
-			tx.Where("post_id IN ?", postIDs).Delete(&models.PostSection{})
-			tx.Where("post_id IN ?", postIDs).Delete(&models.PostTag{})
-			tx.Where("post_id IN ?", postIDs).Delete(&models.ContactPost{})
-			tx.Where("id IN ?", postIDs).Delete(&models.Post{})
+			if err := tx.Where("post_id IN ?", postIDs).Delete(&models.PostMetric{}).Error; err != nil {
+				return fmt.Errorf("delete PostMetric: %w", err)
+			}
+			if err := tx.Where("post_id IN ?", postIDs).Delete(&models.PostSection{}).Error; err != nil {
+				return fmt.Errorf("delete PostSection: %w", err)
+			}
+			if err := tx.Where("post_id IN ?", postIDs).Delete(&models.PostTag{}).Error; err != nil {
+				return fmt.Errorf("delete PostTag: %w", err)
+			}
+			if err := tx.Where("post_id IN ?", postIDs).Delete(&models.ContactPost{}).Error; err != nil {
+				return fmt.Errorf("delete ContactPost by post_id: %w", err)
+			}
+			if err := tx.Where("id IN ?", postIDs).Delete(&models.Post{}).Error; err != nil {
+				return fmt.Errorf("delete Post: %w", err)
+			}
 		}
 
 		var journalMetricIDs []uint
-		tx.Model(&models.JournalMetric{}).Where("journal_id IN ?", journalIDs).Pluck("id", &journalMetricIDs)
+		if err := tx.Model(&models.JournalMetric{}).Where("journal_id IN ?", journalIDs).Pluck("id", &journalMetricIDs).Error; err != nil {
+			return fmt.Errorf("pluck JournalMetric ids: %w", err)
+		}
 		if len(journalMetricIDs) > 0 {
 			// PostMetric references JournalMetricID — already deleted above via postIDs
-			tx.Where("id IN ?", journalMetricIDs).Delete(&models.JournalMetric{})
+			if err := tx.Where("id IN ?", journalMetricIDs).Delete(&models.JournalMetric{}).Error; err != nil {
+				return fmt.Errorf("delete JournalMetric: %w", err)
+			}
 		}
 
-		tx.Where("journal_id IN ?", journalIDs).Delete(&models.SliceOfLife{})
-		tx.Where("id IN ?", journalIDs).Delete(&models.Journal{})
+		if err := tx.Where("journal_id IN ?", journalIDs).Delete(&models.SliceOfLife{}).Error; err != nil {
+			return fmt.Errorf("delete SliceOfLife: %w", err)
+		}
+		if err := tx.Where("id IN ?", journalIDs).Delete(&models.Journal{}).Error; err != nil {
+			return fmt.Errorf("delete Journal: %w", err)
+		}
 	}
 
 	// LifeEventCategory cascade: LifeEvent → LifeEventType → LifeEventCategory
 	var categoryIDs []uint
-	tx.Model(&models.LifeEventCategory{}).Where("vault_id = ?", vaultID).Pluck("id", &categoryIDs)
+	if err := tx.Model(&models.LifeEventCategory{}).Where("vault_id = ?", vaultID).Pluck("id", &categoryIDs).Error; err != nil {
+		return fmt.Errorf("pluck LifeEventCategory ids: %w", err)
+	}
 	if len(categoryIDs) > 0 {
 		var typeIDs []uint
-		tx.Model(&models.LifeEventType{}).Where("life_event_category_id IN ?", categoryIDs).Pluck("id", &typeIDs)
-		if len(typeIDs) > 0 {
-			tx.Where("life_event_type_id IN ?", typeIDs).Delete(&models.LifeEvent{})
-			tx.Where("id IN ?", typeIDs).Delete(&models.LifeEventType{})
+		if err := tx.Model(&models.LifeEventType{}).Where("life_event_category_id IN ?", categoryIDs).Pluck("id", &typeIDs).Error; err != nil {
+			return fmt.Errorf("pluck LifeEventType ids: %w", err)
 		}
-		tx.Where("id IN ?", categoryIDs).Delete(&models.LifeEventCategory{})
+		if len(typeIDs) > 0 {
+			if err := tx.Where("life_event_type_id IN ?", typeIDs).Delete(&models.LifeEvent{}).Error; err != nil {
+				return fmt.Errorf("delete LifeEvent by life_event_type_id: %w", err)
+			}
+			if err := tx.Where("id IN ?", typeIDs).Delete(&models.LifeEventType{}).Error; err != nil {
+				return fmt.Errorf("delete LifeEventType: %w", err)
+			}
+		}
+		if err := tx.Where("id IN ?", categoryIDs).Delete(&models.LifeEventCategory{}).Error; err != nil {
+			return fmt.Errorf("delete LifeEventCategory: %w", err)
+		}
 	}
 
 	// TimelineEvent cascade: LifeEvent (by timeline_event_id) → TimelineEventParticipant → TimelineEvent
 	var timelineIDs []uint
-	tx.Model(&models.TimelineEvent{}).Where("vault_id = ?", vaultID).Pluck("id", &timelineIDs)
+	if err := tx.Model(&models.TimelineEvent{}).Where("vault_id = ?", vaultID).Pluck("id", &timelineIDs).Error; err != nil {
+		return fmt.Errorf("pluck TimelineEvent ids: %w", err)
+	}
 	if len(timelineIDs) > 0 {
-		tx.Where("timeline_event_id IN ?", timelineIDs).Delete(&models.LifeEvent{})
-		tx.Where("timeline_event_id IN ?", timelineIDs).Delete(&models.TimelineEventParticipant{})
-		tx.Where("id IN ?", timelineIDs).Delete(&models.TimelineEvent{})
+		if err := tx.Where("timeline_event_id IN ?", timelineIDs).Delete(&models.LifeEvent{}).Error; err != nil {
+			return fmt.Errorf("delete LifeEvent by timeline_event_id: %w", err)
+		}
+		if err := tx.Where("timeline_event_id IN ?", timelineIDs).Delete(&models.TimelineEventParticipant{}).Error; err != nil {
+			return fmt.Errorf("delete TimelineEventParticipant: %w", err)
+		}
+		if err := tx.Where("id IN ?", timelineIDs).Delete(&models.TimelineEvent{}).Error; err != nil {
+			return fmt.Errorf("delete TimelineEvent: %w", err)
+		}
 	}
 
 	// AddressBookSubscription cascade: DavSyncLog + ContactSubscriptionState → AddressBookSubscription
 	var subIDs []string
-	tx.Model(&models.AddressBookSubscription{}).Where("vault_id = ?", vaultID).Pluck("id", &subIDs)
-	if len(subIDs) > 0 {
-		tx.Where("address_book_subscription_id IN ?", subIDs).Delete(&models.DavSyncLog{})
-		tx.Where("address_book_subscription_id IN ?", subIDs).Delete(&models.ContactSubscriptionState{})
-		tx.Where("id IN ?", subIDs).Delete(&models.AddressBookSubscription{})
+	if err := tx.Model(&models.AddressBookSubscription{}).Where("vault_id = ?", vaultID).Pluck("id", &subIDs).Error; err != nil {
+		return fmt.Errorf("pluck AddressBookSubscription ids: %w", err)
 	}
-
-	// ContactTask cascade: TaskContact pivot rows must go first since they
-	// reference the task by FK, then the tasks themselves.
-	var taskIDs []uint
-	tx.Model(&models.ContactTask{}).Where("vault_id = ?", vaultID).Pluck("id", &taskIDs)
-	if len(taskIDs) > 0 {
-		if err := tx.Where("contact_task_id IN ?", taskIDs).Delete(&models.TaskContact{}).Error; err != nil {
-			return fmt.Errorf("delete TaskContact: %w", err)
+	if len(subIDs) > 0 {
+		if err := tx.Where("address_book_subscription_id IN ?", subIDs).Delete(&models.DavSyncLog{}).Error; err != nil {
+			return fmt.Errorf("delete DavSyncLog by address_book_subscription_id: %w", err)
 		}
-		if err := tx.Unscoped().Where("id IN ?", taskIDs).Delete(&models.ContactTask{}).Error; err != nil {
-			return fmt.Errorf("delete ContactTask by id: %w", err)
+		if err := tx.Where("address_book_subscription_id IN ?", subIDs).Delete(&models.ContactSubscriptionState{}).Error; err != nil {
+			return fmt.Errorf("delete ContactSubscriptionState by address_book_subscription_id: %w", err)
+		}
+		if err := tx.Where("id IN ?", subIDs).Delete(&models.AddressBookSubscription{}).Error; err != nil {
+			return fmt.Errorf("delete AddressBookSubscription: %w", err)
 		}
 	}
 
@@ -328,9 +372,10 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 	//
 	// Step 2 deletes child rows by contact_id IN (this vault's contacts), but a
 	// contact in ANOTHER vault may still hold a child row whose catalog FK
-	// points at one of THIS vault's catalog rows (e.g. a Main contact's
-	// QuickFact filed under a Core template). Those rows keep the catalog FK
-	// constraint alive and block Step 3's catalog deletes.
+	// points at one of THIS vault's catalog rows (e.g. a contact in another
+	// vault has a QuickFact filed under this vault's template). Those rows
+	// keep the catalog FK constraint alive and would block Step 3's catalog
+	// deletes with a Postgres FK violation.
 	//
 	// For nullable FKs, NULL them — preserves the child row in the other vault.
 	// For NOT NULL FKs, hard-delete the cross-vault child row.
@@ -384,6 +429,24 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 			).
 			Delete(d.instance).Error; err != nil {
 			return fmt.Errorf("delete cross-vault %T by %s: %w", d.instance, d.instanceFKCol, err)
+		}
+	}
+
+	// ContactTask cascade: TaskContact pivot rows must go first since they
+	// reference the task by FK, then the tasks themselves. Pluck is Unscoped
+	// so soft-deleted ContactTask rows are also caught — otherwise their
+	// lingering TaskContact rows would block the Unscoped delete that the
+	// vaultChildModels safety net runs below.
+	var taskIDs []uint
+	if err := tx.Model(&models.ContactTask{}).Unscoped().Where("vault_id = ?", vaultID).Pluck("id", &taskIDs).Error; err != nil {
+		return fmt.Errorf("pluck ContactTask ids: %w", err)
+	}
+	if len(taskIDs) > 0 {
+		if err := tx.Where("contact_task_id IN ?", taskIDs).Delete(&models.TaskContact{}).Error; err != nil {
+			return fmt.Errorf("delete TaskContact: %w", err)
+		}
+		if err := tx.Unscoped().Where("id IN ?", taskIDs).Delete(&models.ContactTask{}).Error; err != nil {
+			return fmt.Errorf("delete ContactTask: %w", err)
 		}
 	}
 

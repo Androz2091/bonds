@@ -8,6 +8,7 @@ import (
 	echoSwagger "github.com/swaggo/echo-swagger"
 
 	"github.com/naiba/bonds/internal/config"
+	internalmcp "github.com/naiba/bonds/internal/mcp"
 	"github.com/naiba/bonds/internal/middleware"
 	"github.com/naiba/bonds/internal/models"
 	"github.com/naiba/bonds/internal/search"
@@ -98,6 +99,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	davSyncService := services.NewDavSyncService(db, davClientService, vcardService)
 	davPushService := services.NewDavPushService(db, davClientService, vcardService)
 	monicaImportService := services.NewMonicaImportService(db, cfg.Storage.UploadDir)
+	csvImportService := services.NewCSVImportService(db)
 	adminService := services.NewAdminService(db, cfg.Storage.UploadDir)
 
 	patService := services.NewPersonalAccessTokenService(db)
@@ -166,6 +168,9 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	noteService.SetSearchService(searchService)
 	monicaImportService.SetFeedRecorder(feedRecorder)
 	monicaImportService.SetSearchEngine(searchEngine)
+	csvImportService.SetFeedRecorder(feedRecorder)
+	csvImportService.SetSearchService(searchService)
+	csvImportService.SetDavPushService(davPushService)
 
 	postPhotoHandler := NewPostPhotoHandler(vaultFileService, storageInfoService, systemSettingService)
 	contactPhotoHandler := NewContactPhotoHandler(vaultFileService)
@@ -207,6 +212,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	oauthHandler := NewOAuthHandler(oauthService, systemSettingService, cfg.JWT.Secret)
 	vcardHandler := NewVCardHandler(vcardService)
 	monicaImportHandler := NewMonicaImportHandler(monicaImportService)
+	csvImportHandler := NewCSVImportHandler(csvImportService)
 	invitationHandler := NewInvitationHandler(invitationService)
 	contactLabelHandler := NewContactLabelHandler(contactLabelService)
 	contactReligionHandler := NewContactReligionHandler(contactReligionService)
@@ -714,6 +720,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	settingsGroup.GET("/storage", storageInfoHandler.Get)
 
 	protected.GET("/currencies", currencyHandler.List)
+	protected.GET("/pet-categories", petHandler.ListCategories)
 
 	vaultSettings := vaultScoped.Group("/settings", VaultPermissionMiddleware(vaultService, models.PermissionManager))
 	vaultSettings.GET("", vaultSettingsHandler.Get)
@@ -764,4 +771,15 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	vaultSettings.DELETE("/quickFactTemplates/:id", vaultSettingsHandler.DeleteQuickFactTemplate)
 
 	vaultSettings.POST("/import/monica", monicaImportHandler.Import)
+	vaultSettings.POST("/import/csv", csvImportHandler.Import)
+
+	mcpRegistry := internalmcp.NewActionRegistry(e)
+	mcpExecutor := internalmcp.NewActionExecutor(e, mcpRegistry)
+	mcpSearcher := internalmcp.NewBondsSearcher(db, searchService, vaultService)
+	mcpFetcher := internalmcp.NewResourceFetcher(db, vaultService)
+	mcpHandler := internalmcp.NewHandler(db, mcpRegistry, mcpExecutor, mcpSearcher, mcpFetcher)
+	mcpMiddleware := []echo.MiddlewareFunc{internalmcp.RequireAllowedOrigin(cfg.App.URL, "http://localhost:5173", "http://localhost:3000"), authMiddleware.Authenticate, middleware.RequireEmailVerification(emailVerificationRequired)}
+	e.POST("/mcp", mcpHandler.Handle, mcpMiddleware...)
+	e.GET("/mcp", mcpHandler.MethodNotAllowed, mcpMiddleware...)
+	e.DELETE("/mcp", mcpHandler.MethodNotAllowed, mcpMiddleware...)
 }

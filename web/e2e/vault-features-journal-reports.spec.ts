@@ -328,7 +328,8 @@ test.describe('Vault - Feed, Calendar, Journal and Settings', () => {
     await expect(page.locator('.ant-list-item').first()).toBeVisible({ timeout: 10000 });
     const secondItem = page.locator('.ant-list-item').nth(1);
     await expect(secondItem).toBeVisible({ timeout: 5000 });
-    const secondItemText = await secondItem.locator('.ant-list-item-meta-title').textContent();
+    const secondItemText = (await secondItem.locator('.ant-list-item-meta-title').textContent()) ?? '';
+    expect(secondItemText).not.toBe('');
 
     // Click the UP arrow on the second item to move it to position 0
     const upArrow = secondItem.locator('.anticon-arrow-up');
@@ -348,8 +349,7 @@ test.describe('Vault - Feed, Calendar, Journal and Settings', () => {
     expect(posBody.success).toBe(true);
     await refetchPromise;
     await page.waitForLoadState('networkidle');
-    const firstItemTextAfter = await page.locator('.ant-list-item').first().locator('.ant-list-item-meta-title').textContent();
-    expect(firstItemTextAfter).toBe(secondItemText);
+    await expect(page.locator('.ant-list-item').first().locator('.ant-list-item-meta-title')).toHaveText(secondItemText);
   });
 
   test('Vault Settings Quick Fact Templates - reorder position', async ({ page }) => {
@@ -364,7 +364,8 @@ test.describe('Vault - Feed, Calendar, Journal and Settings', () => {
     await expect(page.locator('.ant-list-item').first()).toBeVisible({ timeout: 10000 });
     const secondItem = page.locator('.ant-list-item').nth(1);
     await expect(secondItem).toBeVisible({ timeout: 5000 });
-    const secondItemText = await secondItem.locator('.ant-list-item-meta-title').textContent();
+    const secondItemText = (await secondItem.locator('.ant-list-item-meta-title').textContent()) ?? '';
+    expect(secondItemText).not.toBe('');
 
     // Click the UP arrow on the second item to move it to position 0
     const upArrow = secondItem.locator('.anticon-arrow-up');
@@ -384,8 +385,7 @@ test.describe('Vault - Feed, Calendar, Journal and Settings', () => {
     expect(posBody.success).toBe(true);
     await refetchPromise;
     await page.waitForLoadState('networkidle');
-    const firstItemTextAfter = await page.locator('.ant-list-item').first().locator('.ant-list-item-meta-title').textContent();
-    expect(firstItemTextAfter).toBe(secondItemText);
+    await expect(page.locator('.ant-list-item').first().locator('.ant-list-item-meta-title')).toHaveText(secondItemText);
   });
 
   test('Dashboard mood recording - record a mood', async ({ page }) => {
@@ -789,7 +789,9 @@ test.describe('Vault Reports - Overview Counts', () => {
     await dateSelects.nth(1).click();
     await page.locator('.ant-select-dropdown:visible .ant-select-item-option').nth(5).click();
     await dateSelects.nth(2).click();
-    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').nth(14).click();
+    // AntD virtualizes day options, so only select from the rendered range instead of relying on absolute indexes.
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: /^24$/ }).click();
+    await dateModal.locator('.ant-modal-header').click();
 
     const dateResp = page.waitForResponse(
       (resp) => resp.url().includes('/dates') && resp.request().method() === 'POST'
