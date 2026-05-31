@@ -12,9 +12,10 @@ interface ContactSummaryCardProps {
   vaultId: string;
   contactId: string;
   contact: Contact;
+  readOnly?: boolean;
 }
 
-export default function ContactSummaryCard({ vaultId, contactId, contact }: ContactSummaryCardProps) {
+export default function ContactSummaryCard({ vaultId, contactId, contact, readOnly = false }: ContactSummaryCardProps) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const nameOrder = useNameOrder();
@@ -110,6 +111,14 @@ export default function ContactSummaryCard({ vaultId, contactId, contact }: Cont
     },
   });
 
+  const { data: contactInfoTypes = [] } = useQuery({
+    queryKey: ["personalize", "contact-info-types"],
+    queryFn: async () => {
+      const res = await api.personalize.personalizeDetail("contact-info-types");
+      return res.data ?? [];
+    },
+  });
+
   // --- Derived data ---
 
   const contactMap = new Map<string, Contact>();
@@ -124,11 +133,20 @@ export default function ContactSummaryCard({ vaultId, contactId, contact }: Cont
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const religionLabel = contact.religion_id ? (religions as any[]).find((r) => r.id === contact.religion_id)?.label : null;
 
-  // Filter emails and phones from contact info
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const emails = (contactInfoItems as any[]).filter((item) => item.kind?.toLowerCase().includes("email"));
+  const typeKindById = new Map<number, string>((contactInfoTypes as any[])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .map((t: any) => [t.id, (t.name || t.label || "").toLowerCase()] as [number, string]));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const phones = (contactInfoItems as any[]).filter((item) => item.kind?.toLowerCase().includes("phone"));
+  const matchesKind = (item: any, needle: string) => {
+    const typeKind = item.type_id ? typeKindById.get(item.type_id) ?? "" : "";
+    if (typeKind.includes(needle)) return true;
+    return !!item.kind && item.kind.toLowerCase().includes(needle);
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const emails = (contactInfoItems as any[]).filter((item) => matchesKind(item, "email"));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const phones = (contactInfoItems as any[]).filter((item) => matchesKind(item, "phone"));
   const hasContactInfo = emails.length > 0 || phones.length > 0;
 
   // First non-past address
@@ -160,15 +178,15 @@ export default function ContactSummaryCard({ vaultId, contactId, contact }: Cont
     marginBottom: 4,
   };
 
-  // Check if any section has data to show (gender/pronoun always show)
   const hasRelationships = relationships.length > 0;
   const hasLabels = labels.length > 0;
   const hasJobs = jobs.length > 0;
+  const hasGenderOrPronoun = !!genderLabel || !!pronounLabel;
   const hasReligion = !!religionLabel;
   const hasAddress = !!primaryAddress;
+  const hasSummaryData = hasRelationships || hasGenderOrPronoun || hasLabels || hasJobs || hasReligion || hasContactInfo || hasAddress;
 
-  // If absolutely nothing to show except "Not set" for gender/pronoun, still render the card
-  // to maintain consistency
+  if (readOnly && !hasSummaryData) return null;
 
   return (
     <div
@@ -214,30 +232,29 @@ export default function ContactSummaryCard({ vaultId, contactId, contact }: Cont
         </div>
       )}
 
-      {/* 2. Gender & Pronoun — always shown */}
-      <div style={sectionStyle}>
+      {(!readOnly || hasGenderOrPronoun) && <div style={sectionStyle}>
         <div style={{ display: "flex", gap: 32 }}>
-          <div style={{ flex: 1 }}>
+          {(!readOnly || genderLabel) && <div style={{ flex: 1 }}>
             <Text type="secondary" style={sectionLabelStyle}>
               {t("contact.detail.summary.gender")}
             </Text>
             <Text style={{ fontSize: 13 }}>
               {genderLabel ?? t("contact.detail.summary.not_set")}
             </Text>
-          </div>
-          <div style={{ flex: 1 }}>
+          </div>}
+          {(!readOnly || pronounLabel) && <div style={{ flex: 1 }}>
             <Text type="secondary" style={sectionLabelStyle}>
               {t("contact.detail.summary.pronoun")}
             </Text>
             <Text style={{ fontSize: 13 }}>
               {pronounLabel ?? t("contact.detail.summary.not_set")}
             </Text>
-          </div>
+          </div>}
         </div>
-      </div>
+      </div>}
 
       {/* 3. Labels */}
-      <div style={sectionStyle}>
+      {(!readOnly || hasLabels) && <div style={sectionStyle}>
         <Text type="secondary" style={sectionLabelStyle}>
           {t("contact.detail.summary.labels")}
         </Text>
@@ -265,7 +282,7 @@ export default function ContactSummaryCard({ vaultId, contactId, contact }: Cont
             {t("contact.detail.summary.not_set")}
           </Text>
         )}
-      </div>
+      </div>}
 
       {/* 4. Job information */}
       {hasJobs && (
@@ -311,13 +328,31 @@ export default function ContactSummaryCard({ vaultId, contactId, contact }: Cont
             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {emails.map((item: any) => (
               <Text key={item.id} style={{ fontSize: 13 }}>
-                📧 {item.data}
+                📧{" "}
+                {item.data ? (
+                  <a
+                    href={`mailto:${item.data}`}
+                    rel="noopener noreferrer nofollow"
+                    style={{ color: token.colorPrimary, wordBreak: "break-word" }}
+                  >
+                    {item.data}
+                  </a>
+                ) : null}
               </Text>
             ))}
             {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {phones.map((item: any) => (
               <Text key={item.id} style={{ fontSize: 13 }}>
-                📱 {item.data}
+                📱{" "}
+                {item.data ? (
+                  <a
+                    href={`tel:${String(item.data).replace(/\s+/g, "")}`}
+                    rel="noopener noreferrer nofollow"
+                    style={{ color: token.colorPrimary, wordBreak: "break-word" }}
+                  >
+                    {item.data}
+                  </a>
+                ) : null}
               </Text>
             ))}
           </Space>

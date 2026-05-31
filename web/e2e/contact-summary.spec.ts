@@ -41,22 +41,22 @@ async function createContact(page: import('@playwright/test').Page, firstName: s
 }
 
 async function navigateToTab(page: import('@playwright/test').Page, tabName: string, exact = false) {
+  await page.getByText('Edit mode', { exact: true }).click();
   const tab = page.getByRole('tab', { name: tabName, exact });
+  await expect(tab).toBeVisible({ timeout: 10000 });
   await tab.click();
   await page.waitForLoadState('networkidle');
 }
 
 test.describe('Contact Summary Card', () => {
 
-  test('summary card should be visible on contact detail page', async ({ page }) => {
+  test('empty summary card should be hidden in read mode', async ({ page }) => {
     await setupVault(page, 'summary-visible');
     await goToContacts(page);
     await createContact(page, 'SummaryVis', 'User');
 
-    // The summary card should exist between the header card and the tabs.
-    // It uses a specific data-testid for reliable E2E selection.
     const summaryCard = page.locator('[data-testid="contact-summary-card"]');
-    await expect(summaryCard).toBeVisible({ timeout: 10000 });
+    await expect(summaryCard).not.toBeVisible({ timeout: 10000 });
   });
 
   test('summary card should show labels after adding one', async ({ page }) => {
@@ -126,6 +126,9 @@ test.describe('Contact Summary Card', () => {
     await expect(infoCard).toBeVisible({ timeout: 10000 });
     // ContactInfo module uses inline form: click Add to show the form
     await infoCard.getByRole('button', { name: /add/i }).click();
+
+    await infoCard.locator('.ant-select:visible').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: /email/i }).first().click();
 
     const valueInput = infoCard.getByPlaceholder(/value/i);
     await expect(valueInput).toBeVisible({ timeout: 5000 });

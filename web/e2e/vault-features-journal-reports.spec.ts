@@ -29,6 +29,14 @@ function getVaultUrl(page: import('@playwright/test').Page): string {
   return page.url();
 }
 
+async function navigateToContactTab(page: import('@playwright/test').Page, tabName: string, exact = false) {
+  await page.getByText('Edit mode', { exact: true }).click();
+  const tab = page.getByRole('tab', { name: tabName, exact });
+  await expect(tab).toBeVisible({ timeout: 10000 });
+  await tab.click();
+  await page.waitForLoadState('networkidle');
+}
+
 async function createJournalAndNavigate(page: import('@playwright/test').Page, vaultUrl: string, journalName: string) {
   await page.goto(vaultUrl + '/journals');
   await page.getByRole('button', { name: 'New Journal' }).click();
@@ -289,6 +297,7 @@ test.describe('Vault - Feed, Calendar, Journal and Settings', () => {
     await page.getByRole('tab', { name: 'Quick Fact Templates' }).click();
     await page.waitForLoadState('networkidle');
 
+    await expect(page.getByText('How we met')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('Hobbies')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('Food preferences')).toBeVisible({ timeout: 10000 });
 
@@ -544,8 +553,7 @@ test.describe('Vault Reminders Page', () => {
     await expect(page).toHaveURL(/\/contacts\/[a-f0-9-]+$/, { timeout: 10000 });
     await expect(page.getByText('ReminderTest User').first()).toBeVisible({ timeout: 10000 });
 
-    await page.getByRole('tab', { name: 'Information', exact: true }).click();
-    await page.waitForLoadState('networkidle');
+    await navigateToContactTab(page, 'Information', true);
 
     const remindersCard = page.locator('.ant-card').filter({ hasText: /Reminders/ });
     await expect(remindersCard).toBeVisible({ timeout: 10000 });
@@ -742,8 +750,7 @@ test.describe('Vault Reports - Overview Counts', () => {
     await expect(page.getByText('Report Two').first()).toBeVisible({ timeout: 10000 });
 
     // Navigate to Contact information tab to add address
-    await page.getByRole('tab', { name: 'Contact information' }).click();
-    await page.waitForLoadState('networkidle');
+    await navigateToContactTab(page, 'Contact information');
 
     const addressCard = page.locator('.ant-card').filter({ hasText: 'Addresses' });
     await expect(addressCard).toBeVisible({ timeout: 10000 });
@@ -765,8 +772,7 @@ test.describe('Vault Reports - Overview Counts', () => {
     expect(addrRespResult.status()).toBeLessThan(400);
 
     // Add an important date to the same contact (Contact information tab)
-    await page.getByRole('tab', { name: 'Contact information' }).click();
-    await page.waitForLoadState('networkidle');
+    await navigateToContactTab(page, 'Contact information');
 
     const datesCard = page.locator('.ant-card').filter({ hasText: 'Important Dates' });
     await expect(datesCard).toBeVisible({ timeout: 10000 });
@@ -787,10 +793,10 @@ test.describe('Vault Reports - Overview Counts', () => {
     const dateFormItem = dateModal.locator('.ant-form-item').filter({ hasText: 'Date' }).last();
     const dateSelects = dateFormItem.locator('.ant-select');
     await dateSelects.nth(1).click();
-    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').nth(5).click();
+    // AntD keeps hidden portal dropdowns and virtualizes day options; use the latest portal and any rendered day.
+    await page.locator('.ant-select-dropdown').last().locator('.ant-select-item-option').nth(5).click();
     await dateSelects.nth(2).click();
-    // AntD virtualizes day options, so only select from the rendered range instead of relying on absolute indexes.
-    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: /^24$/ }).click();
+    await page.locator('.ant-select-dropdown').last().locator('.ant-select-item-option').first().click();
     await dateModal.locator('.ant-modal-header').click();
 
     const dateResp = page.waitForResponse(
@@ -839,8 +845,7 @@ test.describe('Vault Feed - Contact Names', () => {
     await expect(page.getByText('FeedName Tester').first()).toBeVisible({ timeout: 10000 });
 
     // Create a note to generate a feed entry
-    await page.getByRole('tab', { name: 'Information', exact: true }).click();
-    await page.waitForLoadState('networkidle');
+    await navigateToContactTab(page, 'Information', true);
 
     const notesCard = page.locator('.ant-card').filter({ hasText: /^Notes/ });
     await expect(notesCard).toBeVisible({ timeout: 10000 });

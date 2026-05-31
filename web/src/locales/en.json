@@ -557,6 +557,8 @@
       "delete_failed": "Failed to delete contact",
       "change_template": "Change Template",
       "template_updated": "Template updated",
+      "view_mode": "View mode",
+      "edit_mode": "Edit mode",
       "tabs": {
         "overview": "Overview",
         "relationships": "Relationships",
@@ -684,7 +686,9 @@
       "type_other": "Other",
       "date_type": "Date Type",
       "select_type": "Select date type",
-      "remind_me": "Remind me yearly"
+      "remind_me": "Remind me yearly",
+      "age_years": "{{count}} years old",
+      "age_years_one": "{{count}} year old"
     },
     "tasks": {
       "title": "Tasks",

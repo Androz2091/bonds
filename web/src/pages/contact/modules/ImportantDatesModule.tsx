@@ -26,6 +26,17 @@ import type { CalendarDatePickerValue } from "@/components/CalendarDatePicker";
 import { getCalendarSystem } from "@/utils/calendar";
 import type { CalendarType } from "@/utils/calendar";
 
+function computeAge(d: ImportantDate, reference: dayjs.Dayjs = dayjs()): number | null {
+  if (!d.year || !d.month || !d.day) return null;
+  const birth = dayjs(new Date(d.year, d.month - 1, d.day));
+  if (!birth.isValid() || birth.isAfter(reference)) return null;
+  let age = reference.year() - birth.year();
+  if (reference.month() < birth.month() || (reference.month() === birth.month() && reference.date() < birth.date())) {
+    age -= 1;
+  }
+  return age >= 0 ? age : null;
+}
+
 function formatDateDisplay(d: ImportantDate, fullFormat: string, shortFormat: string): string {
   if (d.calendar_type && d.calendar_type !== "gregorian" && d.original_month != null && d.original_day != null) {
     const sys = getCalendarSystem(d.calendar_type as CalendarType);
@@ -179,36 +190,69 @@ export default function ImportantDatesModule({
         dataSource={dates}
         locale={{ emptyText: <Empty description={t("modules.important_dates.no_dates")} /> }}
         split={false}
-        renderItem={(d: ImportantDate) => (
-          <List.Item
-            style={{
-              borderRadius: token.borderRadius,
-              padding: '10px 12px',
-              marginBottom: 4,
-              transition: 'background 0.2s',
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = token.colorFillQuaternary; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-            actions={[
-              <Button key="e" type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(d)} />,
-              <Popconfirm key="d" title={t("modules.important_dates.delete_confirm")} onConfirm={() => deleteMutation.mutate(d.id!)}>
-                <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-              </Popconfirm>,
-            ]}
-          >
-            <List.Item.Meta
-              title={<span style={{ fontWeight: 500 }}>{d.label}</span>}
-               description={
-                 <>
-                    <span style={{ color: token.colorTextSecondary }}>{formatDateDisplay(d, dateFormats.full, dateFormats.short)}</span>{" "}
-                   {altCalendar && d.calendar_type && d.calendar_type !== "gregorian" && (
-                     <Tag color="volcano">{d.calendar_type}</Tag>
-                   )}
-                 </>
-               }
-            />
-          </List.Item>
-        )}
+        renderItem={(d: ImportantDate) => {
+          const findByInternalType = (kind: string): ImportantDate | undefined =>
+            (dates as ImportantDate[]).find((x: ImportantDate) => {
+              const tp = dateTypes.find((dt) => dt.id === x.contact_important_date_type_id);
+              return tp?.internal_type === kind;
+            });
+          const matchedType = dateTypes.find((dt) => dt.id === d.contact_important_date_type_id);
+          const isBirthday = matchedType?.internal_type === "birthdate";
+          const isDeceasedItem = matchedType?.internal_type === "deceased_date";
+          const birthDate = findByInternalType("birthdate");
+          const deceasedDate = findByInternalType("deceased_date");
+          const isDeceased = !!deceasedDate;
+          let age: number | null = null;
+          if (isBirthday && !isDeceased) {
+            age = computeAge(d);
+          } else if (
+            isDeceasedItem &&
+            birthDate &&
+            deceasedDate?.year &&
+            deceasedDate.month &&
+            deceasedDate.day
+          ) {
+            const ref = dayjs(new Date(deceasedDate.year, deceasedDate.month - 1, deceasedDate.day));
+            age = computeAge(birthDate, ref);
+          }
+          return (
+            <List.Item
+              style={{
+                borderRadius: token.borderRadius,
+                padding: '10px 12px',
+                marginBottom: 4,
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = token.colorFillQuaternary; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              actions={[
+                <Button key="e" type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(d)} />,
+                <Popconfirm key="d" title={t("modules.important_dates.delete_confirm")} onConfirm={() => deleteMutation.mutate(d.id!)}>
+                  <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>,
+              ]}
+            >
+              <List.Item.Meta
+                title={
+                  <span style={{ fontWeight: 500 }}>
+                    {d.label}
+                    {age !== null && (
+                      <Tag style={{ marginLeft: 8 }}>{t("modules.important_dates.age_years", { count: age })}</Tag>
+                    )}
+                  </span>
+                }
+                 description={
+                   <>
+                      <span style={{ color: token.colorTextSecondary }}>{formatDateDisplay(d, dateFormats.full, dateFormats.short)}</span>{" "}
+                     {altCalendar && d.calendar_type && d.calendar_type !== "gregorian" && (
+                       <Tag color="volcano">{d.calendar_type}</Tag>
+                     )}
+                   </>
+                 }
+              />
+            </List.Item>
+          );
+        }}
       />
 
       <Modal
