@@ -197,7 +197,13 @@
       "life_event_summary": "摘要",
       "life_event_description": "描述",
       "life_event_added": "生活事件已添加",
-      "life_event_date": "日期"
+      "life_event_date": "日期",
+      "catch_up_title": "保持联系",
+      "no_catch_up": "暂无需要联系的人",
+      "catch_up_due": "已逾期 {{days}} 天",
+      "catch_up_last_talked": "上次联系 {{date}}",
+      "catch_up_mark": "完成",
+      "catch_up_marked": "已记录本次联系"
     },
     "calendar": {
       "title": "日历",
@@ -467,7 +473,7 @@
       "carddav_url": "CardDAV 地址",
       "caldav_url": "CalDAV 地址",
       "auth_note": "认证说明",
-      "auth_note_text": "配置 DAV 客户端时，请使用你的登录邮箱和密码进行 Basic Auth 认证。",
+      "auth_note_text": "配置 DAV 客户端时，请使用你的登录邮箱（{{email}}）和密码进行 Basic Auth 认证。",
       "copy_success": "已复制",
       "address_book": "通讯录",
       "address_book_placeholder": "选择通讯录",
@@ -495,12 +501,14 @@
       "col_nickname": "昵称",
       "col_status": "状态",
       "col_updated": "更新时间",
+      "col_first_met": "初次见面",
       "total": "共 {{count}} 位联系人",
       "no_match": "没有匹配的联系人",
       "no_contacts": "暂无联系人",
       "load_failed": "加载联系人失败",
       "sort_by": "排序",
       "sort_name": "姓名",
+      "sort_first_met": "初次见面",
       "sort_updated": "最后更新",
       "filter_label": "标签筛选",
       "all_labels": "所有标签",
@@ -519,6 +527,28 @@
     "needs_verification": {
       "badge": "待核实",
       "field_label": "标记为待核实（稍后再确认）"
+    },
+    "meeting": {
+      "title": "相识信息",
+      "description": "记录你们第一次见面的时间，以及是谁介绍认识的。",
+      "first_met_at": "初次见面",
+      "first_met_at_help": "你第一次见到这位联系人的日期。",
+      "first_met_through": "经由联系人",
+      "first_met_through_help": "可选：介绍你们认识的联系人。",
+      "first_met_through_placeholder": "选择联系人"
+    },
+    "catch_up": {
+      "title": "保持联系",
+      "description": "设置你希望多久联系一次这位联系人。",
+      "last_talked_to": "上次联系时间",
+      "last_talked_to_help": "用于计算下一次联系日期。",
+      "frequency_days": "联系间隔（天）",
+      "frequency_days_help": "留空则不生成联系提示。",
+      "last_contact_summary": "上次联系 {{date}}",
+      "frequency_summary": "每 {{days}} 天",
+      "next_due_summary": "下次应在 {{date}}",
+      "mark_caught_up": "标记已联系",
+      "marked_caught_up": "已记录本次联系"
     },
     "create": {
       "title": "添加联系人",
@@ -557,8 +587,8 @@
       "delete_failed": "删除联系人失败",
       "change_template": "更换模板",
       "template_updated": "模板已更新",
-      "view_mode": "查看模式",
-      "edit_mode": "编辑模式",
+      "view_mode": "摘要",
+      "edit_mode": "编辑",
       "tabs": {
         "overview": "概览",
         "relationships": "关系",
@@ -932,6 +962,9 @@
       "description": "自定义 Bonds 的显示方式和使用体验。",
       "name_order": "姓名显示顺序",
       "date_format": "日期格式",
+      "week_start": "每周开始于",
+      "week_start_sunday": "周日",
+      "week_start_monday": "周一",
       "timezone": "时区",
       "language": "语言",
       "save": "保存更改",
@@ -987,7 +1020,10 @@
       "edit_channel": "编辑渠道",
       "edit_modal_title": "编辑通知渠道",
       "updated": "渠道已更新",
-      "content_changed_reverify": "目标地址已更改——邮件渠道需要重新验证。"
+      "content_changed_reverify": "目标地址已更改——邮件渠道需要重新验证。",
+      "preferred_time": "首选发送时间",
+      "preferred_time_help": "每日提醒通知会按这个本地时间发送。",
+      "preferred_time_display": "每日提醒时间 {{time}}"
     },
     "personalize": {
       "title": "个性化",

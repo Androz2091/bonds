@@ -197,7 +197,13 @@
       "life_event_summary": "Résumé",
       "life_event_description": "Description",
       "life_event_added": "Événement de la vie ajouté",
-      "life_event_date": "Date"
+      "life_event_date": "Date",
+      "catch_up_title": "Prendre des nouvelles",
+      "no_catch_up": "Personne n'est à relancer",
+      "catch_up_due": "{{days}} jours de retard",
+      "catch_up_last_talked": "Dernier échange {{date}}",
+      "catch_up_mark": "Fait",
+      "catch_up_marked": "Prise de nouvelles enregistrée"
     },
     "calendar": {
       "title": "Calendrier",
@@ -495,12 +501,14 @@
       "col_nickname": "Surnom",
       "col_status": "Statut",
       "col_updated": "Mis à jour",
+      "col_first_met": "Première rencontre",
       "total": "{{count}}contacts",
       "no_match": "Aucun contact ne correspond à votre recherche",
       "no_contacts": "Aucun contact pour l'instant",
       "load_failed": "Échec du chargement des contacts",
       "sort_by": "Trier par",
       "sort_name": "Nom",
+      "sort_first_met": "Première rencontre",
       "sort_updated": "Dernière mise à jour",
       "filter_label": "Filtrer par étiquette",
       "all_labels": "Toutes les étiquettes",
@@ -519,6 +527,28 @@
     "needs_verification": {
       "badge": "A vérifier",
       "field_label": "Vérification nécessaire (indicateur pour examen ultérieur)"
+    },
+    "meeting": {
+      "title": "Comment vous vous êtes rencontrés",
+      "description": "Notez quand vous vous êtes rencontrés et qui vous a présentés.",
+      "first_met_at": "Première rencontre",
+      "first_met_at_help": "La date de votre première rencontre avec cette personne.",
+      "first_met_through": "Présenté par",
+      "first_met_through_help": "Contact facultatif qui vous a présentés.",
+      "first_met_through_placeholder": "Sélectionnez un contact"
+    },
+    "catch_up": {
+      "title": "Garder le contact",
+      "description": "Définissez la fréquence à laquelle vous voulez reprendre contact avec cette personne.",
+      "last_talked_to": "Dernier échange",
+      "last_talked_to_help": "Utilisé pour calculer la prochaine date de reprise de contact.",
+      "frequency_days": "Reprendre contact tous les (jours)",
+      "frequency_days_help": "Laissez vide pour désactiver les suggestions.",
+      "last_contact_summary": "Dernier échange {{date}}",
+      "frequency_summary": "Tous les {{days}} jours",
+      "next_due_summary": "Prochaine date {{date}}",
+      "mark_caught_up": "Marquer comme fait",
+      "marked_caught_up": "Prise de nouvelles enregistrée"
     },
     "create": {
       "title": "Ajouter un contact",
@@ -557,8 +587,8 @@
       "delete_failed": "Échec de la suppression du contact",
       "change_template": "Changer de modèle",
       "template_updated": "Modèle mis à jour",
-      "view_mode": "Mode vue",
-      "edit_mode": "Mode édition",
+      "view_mode": "Résumé",
+      "edit_mode": "Modifier",
       "tabs": {
         "overview": "Aperçu",
         "relationships": "Relations",
@@ -932,6 +962,9 @@
       "description": "Personnalisez l'apparence et la sensation de Bonds pour vous.",
       "name_order": "Ordre d'affichage du nom",
       "date_format": "Format des dates",
+      "week_start": "La semaine commence le",
+      "week_start_sunday": "Dimanche",
+      "week_start_monday": "Lundi",
       "timezone": "Fuseau horaire",
       "language": "Langue",
       "save": "Enregistrer les modifications",
@@ -987,7 +1020,10 @@
       "edit_channel": "Modifier la chaîne",
       "edit_modal_title": "Modifier le canal de notification",
       "updated": "Chaîne mise à jour",
-      "content_changed_reverify": "Destination modifiée : les canaux de messagerie nécessitent une nouvelle vérification."
+      "content_changed_reverify": "Destination modifiée : les canaux de messagerie nécessitent une nouvelle vérification.",
+      "preferred_time": "Heure d'envoi préférée",
+      "preferred_time_help": "Les rappels quotidiens sont planifiés à cette heure locale.",
+      "preferred_time_display": "Rappels quotidiens à {{time}}"
     },
     "personalize": {
       "title": "Personnaliser",

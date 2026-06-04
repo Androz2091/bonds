@@ -1,13 +1,33 @@
 import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { Card, Form, Input, Button, Typography, App, theme, Select, Checkbox } from "antd";
+import { Card, Form, Input, Button, Typography, App, theme, Select, Checkbox, InputNumber } from "antd";
 import { ArrowLeftOutlined, UserOutlined } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api";
-import type { CreateContactRequest, APIError } from "@/api";
+import type { CreateContactRequest, APIError, Contact } from "@/api";
 import { useTranslation } from "react-i18next";
+import { dateInputToTimestamp } from "@/utils/dateOnlyInput";
+import { formatContactName, useNameOrder } from "@/utils/nameFormat";
 
 const { Title, Text } = Typography;
+
+type ContactCreateFormValues = Omit<CreateContactRequest, "last_talked_to" | "first_met_at"> & {
+  last_talked_to?: string;
+  first_met_at?: string;
+};
+
+function buildCreateContactRequest(values: ContactCreateFormValues): CreateContactRequest {
+  const request: CreateContactRequest = {
+    ...values,
+    last_talked_to: dateInputToTimestamp(values.last_talked_to),
+    first_met_at: dateInputToTimestamp(values.first_met_at),
+  };
+  if (!request.last_talked_to) delete request.last_talked_to;
+  if (!request.first_met_at) delete request.first_met_at;
+  if (!request.first_met_through_contact_id) delete request.first_met_through_contact_id;
+  if (request.stay_in_touch_frequency_days == null) delete request.stay_in_touch_frequency_days;
+  return request;
+}
 
 export default function ContactCreate() {
   const { id } = useParams<{ id: string }>();
@@ -18,6 +38,19 @@ export default function ContactCreate() {
   const { message } = App.useApp();
   const { t } = useTranslation();
   const { token } = theme.useToken();
+  const nameOrder = useNameOrder();
+
+  const { data: contactOptions = [], isLoading: isContactOptionsLoading } = useQuery<Contact[]>({
+    queryKey: ["vaults", vaultId, "contacts", "meeting-options"],
+    queryFn: async () => {
+      const res = await api.contacts.contactsList(String(vaultId), { per_page: 9999, filter: "all" });
+      return res.data ?? [];
+    },
+  });
+
+  const meetingContactOptions = contactOptions.flatMap((contact) => (
+    contact.id ? [{ label: formatContactName(nameOrder, contact), value: contact.id }] : []
+  ));
 
   const mutation = useMutation({
     mutationFn: (data: CreateContactRequest) =>
@@ -40,9 +73,9 @@ export default function ContactCreate() {
     },
   });
 
-  function onFinish(values: CreateContactRequest) {
+  function onFinish(values: ContactCreateFormValues) {
     setLoading(true);
-    mutation.mutate(values);
+    mutation.mutate(buildCreateContactRequest(values));
   }
 
   return (
@@ -154,6 +187,83 @@ export default function ContactCreate() {
           <Form.Item name="needs_verification" valuePropName="checked" style={{ marginBottom: 8 }}>
             <Checkbox>{t("contact.needs_verification.field_label")}</Checkbox>
           </Form.Item>
+
+          <div
+            style={{
+              margin: "16px 0",
+              padding: 16,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: token.borderRadiusLG,
+              background: token.colorFillQuaternary,
+            }}
+          >
+            <Text strong style={{ display: "block", marginBottom: 4 }}>
+              {t("contact.meeting.title")}
+            </Text>
+            <Text type="secondary" style={{ display: "block", fontSize: 13, marginBottom: 12 }}>
+              {t("contact.meeting.description")}
+            </Text>
+            <div style={{ display: "flex", gap: 16 }}>
+              <Form.Item
+                name="first_met_at"
+                label={t("contact.meeting.first_met_at")}
+                extra={t("contact.meeting.first_met_at_help")}
+                style={{ flex: 1 }}
+              >
+                <Input type="date" />
+              </Form.Item>
+              <Form.Item
+                name="first_met_through_contact_id"
+                label={t("contact.meeting.first_met_through")}
+                extra={t("contact.meeting.first_met_through_help")}
+                style={{ flex: 1 }}
+              >
+                <Select
+                  allowClear
+                  showSearch
+                  loading={isContactOptionsLoading}
+                  optionFilterProp="label"
+                  placeholder={t("contact.meeting.first_met_through_placeholder")}
+                  options={meetingContactOptions}
+                />
+              </Form.Item>
+            </div>
+          </div>
+
+          <div
+            style={{
+              margin: "16px 0",
+              padding: 16,
+              border: `1px solid ${token.colorBorderSecondary}`,
+              borderRadius: token.borderRadiusLG,
+              background: token.colorFillQuaternary,
+            }}
+          >
+            <Text strong style={{ display: "block", marginBottom: 4 }}>
+              {t("contact.catch_up.title")}
+            </Text>
+            <Text type="secondary" style={{ display: "block", fontSize: 13, marginBottom: 12 }}>
+              {t("contact.catch_up.description")}
+            </Text>
+            <div style={{ display: "flex", gap: 16 }}>
+              <Form.Item
+                name="last_talked_to"
+                label={t("contact.catch_up.last_talked_to")}
+                extra={t("contact.catch_up.last_talked_to_help")}
+                style={{ flex: 1 }}
+              >
+                <Input type="date" />
+              </Form.Item>
+              <Form.Item
+                name="stay_in_touch_frequency_days"
+                label={t("contact.catch_up.frequency_days")}
+                extra={t("contact.catch_up.frequency_days_help")}
+                style={{ flex: 1 }}
+              >
+                <InputNumber min={1} precision={0} style={{ width: "100%" }} />
+              </Form.Item>
+            </div>
+          </div>
 
           <Form.Item style={{ marginBottom: 0, marginTop: 8, textAlign: "right" }}>
             <Button
