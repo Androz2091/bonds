@@ -41,7 +41,7 @@ async function createContact(page: import('@playwright/test').Page, firstName: s
 }
 
 async function navigateToTab(page: import('@playwright/test').Page, tabName: string, exact = false) {
-  await page.locator('.ant-segmented-item-label').getByText('Edit', { exact: true }).click();
+  await page.locator('.ant-segmented-item-label').getByText('Full view', { exact: true }).click();
   const tab = page.getByRole('tab', { name: tabName, exact });
   await expect(tab).toBeVisible({ timeout: 10000 });
   await tab.click();
@@ -108,7 +108,13 @@ test.describe('Contact Summary Card', () => {
     // Now verify the summary card shows the label
     const summaryCard = page.locator('[data-testid="contact-summary-card"]');
     await expect(summaryCard).toBeVisible({ timeout: 10000 });
-    await expect(summaryCard.locator('.ant-tag').filter({ hasText: 'summary-label' })).toBeVisible({ timeout: 10000 });
+    const labelTag = summaryCard.locator('[data-testid="summary-labels"] .ant-tag').filter({ hasText: 'summary-label' });
+    await expect(labelTag).toBeVisible({ timeout: 10000 });
+
+    // Clicking the label deep-links into the contacts list filtered by it
+    await labelTag.click();
+    await expect(page).toHaveURL(/label=\d+/, { timeout: 10000 });
+    await expect(page.getByText('LabelSum User').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('summary card should show contact info (email/phone) after adding', async ({ page }) => {
@@ -362,7 +368,66 @@ test.describe('Contact Summary Card', () => {
 
     const summaryCard = page.locator('[data-testid="contact-summary-card"]');
     await expect(summaryCard).toBeVisible({ timeout: 10000 });
-    // Should show the relationship (ChildSum User)
-    await expect(summaryCard.getByText(/ChildSum/)).toBeVisible({ timeout: 10000 });
+    // Should show the relationship (ChildSum User) in the relationships section.
+    // Scope to the family/relationships block since the embedded network graph
+    // also renders the related contact's name as a node label.
+    const relationshipSection = summaryCard.locator(
+      '[data-testid="summary-family"], [data-testid="summary-relationships"]',
+    );
+    await expect(relationshipSection.getByText(/ChildSum/).first()).toBeVisible({ timeout: 10000 });
+  });
+
+  test('summary shows clickable groups and the relationship network graph', async ({ page }) => {
+    await setupVault(page, 'summary-groups');
+    const vaultUrl = page.url();
+
+    // Create a group on the dedicated groups page
+    await page.goto(vaultUrl + '/groups');
+    await page.waitForLoadState('networkidle');
+    await page.getByRole('button', { name: /new group/i }).first().click();
+    const groupModal = page.locator('.ant-modal').filter({ hasText: /new group/i });
+    await expect(groupModal).toBeVisible({ timeout: 5000 });
+    await groupModal.locator('input#name').fill('summary-group');
+    const groupResp = page.waitForResponse(
+      (resp) => resp.url().includes('/groups') && resp.request().method() === 'POST'
+    );
+    await groupModal.getByRole('button', { name: /ok/i }).click();
+    await groupResp;
+    await expect(page.locator('.ant-list').getByText('summary-group')).toBeVisible({ timeout: 15000 });
+
+    // Create a contact and add it to the group
+    await page.goto(vaultUrl);
+    await page.waitForLoadState('networkidle');
+    await goToContacts(page);
+    await createContact(page, 'GroupSum', 'User');
+
+    await navigateToTab(page, 'Social');
+    await page.waitForTimeout(1000);
+    const groupsCard = page.locator('.ant-card').filter({ has: page.locator('h5', { hasText: 'Groups' }) });
+    await expect(groupsCard).toBeVisible({ timeout: 15000 });
+    await groupsCard.getByRole('button', { name: /add/i }).click();
+    const addGroupModal = page.locator('.ant-modal:visible');
+    await expect(addGroupModal).toBeVisible({ timeout: 5000 });
+    await addGroupModal.locator('.ant-select').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: 'summary-group' }).click();
+    const addResp = page.waitForResponse(
+      (resp) => resp.url().includes('/groups') && resp.request().method() === 'POST'
+    );
+    await addGroupModal.getByRole('button', { name: /save/i }).click();
+    await addResp;
+    await page.waitForLoadState('networkidle');
+
+    const summaryCard = page.locator('[data-testid="contact-summary-card"]');
+    await expect(summaryCard).toBeVisible({ timeout: 10000 });
+
+    // Network graph is embedded in the summary
+    await expect(summaryCard.locator('[data-testid="summary-network"]')).toBeVisible({ timeout: 10000 });
+
+    // Group tag is clickable and deep-links into the filtered contacts list
+    const groupTag = summaryCard.locator('[data-testid="summary-groups"] .ant-tag').filter({ hasText: 'summary-group' });
+    await expect(groupTag).toBeVisible({ timeout: 10000 });
+    await groupTag.click();
+    await expect(page).toHaveURL(/group=\d+/, { timeout: 10000 });
+    await expect(page.getByText('GroupSum User').first()).toBeVisible({ timeout: 10000 });
   });
 });

@@ -512,6 +512,8 @@
       "sort_updated": "Last updated",
       "filter_label": "Filter by label",
       "all_labels": "All labels",
+      "filter_group": "Filter by group",
+      "all_groups": "All groups",
       "quick_search": "Quick search",
       "col_birthday": "Birthday",
       "col_age": "Age",
@@ -588,7 +590,7 @@
       "change_template": "Change Template",
       "template_updated": "Template updated",
       "view_mode": "Summary",
-      "edit_mode": "Edit",
+      "edit_mode": "Full view",
       "tabs": {
         "overview": "Overview",
         "relationships": "Relationships",
@@ -655,6 +657,10 @@
       },
       "summary": {
         "family": "Family summary",
+        "family_group": "Family",
+        "relationships": "Relationships",
+        "groups": "Groups",
+        "network": "Relationship network",
         "gender": "Gender",
         "pronoun": "Pronoun",
         "labels": "Labels",
@@ -1148,7 +1154,14 @@
     "created_warning": "Copy this token now. You won't be able to see it again.",
     "copied": "Copied!",
     "delete_confirm": "Delete this token? Any applications using it will lose access.",
-    "token_name_duplicate": "Token name already exists"
+    "token_name_duplicate": "Token name already exists",
+    "scopes": "Scopes",
+    "scope_help": "Full access can use every API endpoint. A scoped token can only reach the matching endpoints.",
+    "scope_full": "Full access",
+    "scope_calendar_read": "Calendar (read-only)",
+    "calendar_feed_title": "Calendar Subscription (iCal)",
+    "calendar_feed_help": "Create a Calendar (read-only) token above, then subscribe to this URL in any calendar app. Replace {vault_id} with your vault ID and {token} with the token value.",
+    "invalid_token_scope": "Invalid token scope"
   },
   "twoFactor": {
     "title": "Two-Factor Authentication",

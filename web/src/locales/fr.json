@@ -512,6 +512,8 @@
       "sort_updated": "Dernière mise à jour",
       "filter_label": "Filtrer par étiquette",
       "all_labels": "Toutes les étiquettes",
+      "filter_group": "Filtrer par groupe",
+      "all_groups": "Tous les groupes",
       "quick_search": "Recherche rapide",
       "col_birthday": "Anniversaire",
       "col_age": "Âge",
@@ -588,7 +590,7 @@
       "change_template": "Changer de modèle",
       "template_updated": "Modèle mis à jour",
       "view_mode": "Résumé",
-      "edit_mode": "Modifier",
+      "edit_mode": "Vue complète",
       "tabs": {
         "overview": "Aperçu",
         "relationships": "Relations",
@@ -655,6 +657,10 @@
       },
       "summary": {
         "family": "Résumé familial",
+        "family_group": "Famille",
+        "relationships": "Relations",
+        "groups": "Groupes",
+        "network": "Réseau de relations",
         "gender": "Genre",
         "pronoun": "Pronom",
         "labels": "Étiquettes",
@@ -1148,7 +1154,14 @@
     "created_warning": "Copiez ce jeton maintenant. Vous ne pourrez plus le revoir.",
     "copied": "Copié!",
     "delete_confirm": "Supprimer ce jeton ? Toutes les applications qui l'utilisent perdront l'accès.",
-    "token_name_duplicate": "Le nom du jeton existe déjà"
+    "token_name_duplicate": "Le nom du jeton existe déjà",
+    "scopes": "Portées",
+    "scope_help": "L'accès complet peut utiliser tous les points de terminaison de l'API. Un jeton à portée limitée ne peut atteindre que les points de terminaison correspondants.",
+    "scope_full": "Accès complet",
+    "scope_calendar_read": "Calendrier (lecture seule)",
+    "calendar_feed_title": "Abonnement au calendrier (iCal)",
+    "calendar_feed_help": "Créez un jeton Calendrier (lecture seule) ci-dessus, puis abonnez-vous à cette URL dans n'importe quelle application de calendrier. Remplacez {vault_id} par l'ID de votre vault et {token} par la valeur du jeton.",
+    "invalid_token_scope": "Portée de jeton non valide"
   },
   "twoFactor": {
     "title": "Authentification à deux facteurs",
