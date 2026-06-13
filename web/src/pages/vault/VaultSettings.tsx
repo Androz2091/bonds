@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { formatContactName, useNameOrder } from "@/utils/nameFormat";
+import type { ContactNameFields } from "@/utils/nameFormat";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -23,6 +24,7 @@ import {
   Spin,
   Alert,
   theme,
+  Radio,
 } from "antd";
 import {
   SaveOutlined,
@@ -44,6 +46,9 @@ import type {
   LabelResponse,
   LifeEventCategoryResponse,
   LifeEventCategoryTypeResponse,
+  CreateQuickFactTemplateRequest,
+  UpdateQuickFactTemplateRequest,
+  QuickFactTemplateResponse,
 } from "@/api";
 import type {
   GithubComNaibaBondsInternalDtoMonicaImportResponse,
@@ -55,6 +60,57 @@ import { getReadableLabelTagColors } from "@/utils/labelColor";
 const { Title, Text } = Typography;
 const { Option } = Select;
 
+const NAME_ORDER_PRESETS = [
+  "%first_name% %last_name%",
+  "%last_name% %first_name%",
+  "%first_name% %last_name% {nickname? (%nickname%)}",
+  "%nickname%",
+] as const;
+
+const CUSTOM_SENTINEL = "__custom__";
+
+const QUICK_FACT_FIELD_TYPES = ["text", "number", "date", "select", "photo", "document"] as const;
+type QuickFactFieldType = (typeof QUICK_FACT_FIELD_TYPES)[number];
+
+function isQuickFactFieldType(value: string | undefined): value is QuickFactFieldType {
+  return QUICK_FACT_FIELD_TYPES.some((fieldType) => fieldType === value);
+}
+
+function normalizeQuickFactFieldType(value: unknown): QuickFactFieldType {
+  return typeof value === "string" && isQuickFactFieldType(value) ? value : "text";
+}
+
+function isQuickFactScalarFieldType(fieldType: QuickFactFieldType) {
+  return fieldType === "text" || fieldType === "number" || fieldType === "date" || fieldType === "select";
+}
+
+function parseSelectOptions(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(/\r?\n/)
+    .map((option) => option.trim())
+    .filter(Boolean);
+}
+
+interface QuickFactTemplateFormValues {
+  label: string;
+  field_type: QuickFactFieldType;
+  required?: boolean;
+  help_text?: string;
+  default_value?: string;
+  select_options?: string;
+}
+
+const SAMPLE_CONTACT: ContactNameFields = {
+  first_name: "James",
+  last_name: "Bond",
+  middle_name: "Herbert",
+  nickname: "007",
+  maiden_name: "",
+  prefix: "",
+  suffix: "",
+};
+
+
 export default function VaultSettings() {
   const { id } = useParams<{ id: string }>();
   const vaultId = id!;
@@ -65,6 +121,9 @@ export default function VaultSettings() {
   const { token } = theme.useToken();
 
   const [activeTab, setActiveTab] = useState("general");
+  const [nameOrderMode, setNameOrderMode] = useState<"global" | "override">("global");
+  const [nameOrderTemplate, setNameOrderTemplate] = useState<string>(NAME_ORDER_PRESETS[0]);
+  const [customNameOrderTemplate, setCustomNameOrderTemplate] = useState("");
 
   const { data: vaultSettings } = useQuery({
     queryKey: ["vault", vaultId, "settings"],
@@ -74,6 +133,18 @@ export default function VaultSettings() {
     },
     enabled: !!vaultId,
   });
+
+  useEffect(() => {
+    if (!vaultSettings) return;
+
+    const vaultNameOrder = vaultSettings.name_order;
+    const hasOverride = vaultNameOrder !== null && vaultNameOrder !== undefined;
+    const isPreset = hasOverride && (NAME_ORDER_PRESETS as readonly string[]).includes(vaultNameOrder);
+
+    setNameOrderMode(hasOverride ? "override" : "global");
+    setNameOrderTemplate(hasOverride ? (isPreset ? vaultNameOrder : CUSTOM_SENTINEL) : NAME_ORDER_PRESETS[0]);
+    setCustomNameOrderTemplate(hasOverride && !isPreset ? vaultNameOrder : "");
+  }, [vaultSettings]);
 
   const { data: personalizeTemplates } = useQuery<PersonalizeItem[]>({
     queryKey: ["settings", "personalize", "templates"],
@@ -89,6 +160,19 @@ export default function VaultSettings() {
     onSuccess: () => {
       message.success(t("common.saved"));
       queryClient.invalidateQueries({ queryKey: ["vault", vaultId] });
+    },
+    onError: (e: APIError) => message.error(e.message),
+  });
+
+  const updateNameOrderMutation = useMutation({
+    mutationFn: (nextNameOrder: string | undefined) =>
+      api.vaultSettings.settingsNameOrderUpdate(String(vaultId), { name_order: nextNameOrder }),
+    onSuccess: () => {
+      message.success(t("common.saved"));
+      queryClient.invalidateQueries({ queryKey: ["vault", vaultId, "settings"] });
+      queryClient.invalidateQueries({ queryKey: ["vault", vaultId] });
+      queryClient.invalidateQueries({ queryKey: ["vaults", vaultId] });
+      queryClient.invalidateQueries({ queryKey: ["vaults"] });
     },
     onError: (e: APIError) => message.error(e.message),
   });
@@ -144,10 +228,30 @@ export default function VaultSettings() {
 
   // --- Components for each tab ---
 
+
   const GeneralTab = () => {
     const [form] = Form.useForm();
 
+    const presetLabels: Record<string, string> = {
+      [NAME_ORDER_PRESETS[0]]: t("settings.preferences.name_order_first_last"),
+      [NAME_ORDER_PRESETS[1]]: t("settings.preferences.name_order_last_first"),
+      [NAME_ORDER_PRESETS[2]]: t("settings.preferences.name_order_first_last_nickname"),
+      [NAME_ORDER_PRESETS[3]]: t("settings.preferences.name_order_nickname"),
+    };
+
+    const presetExamples: Record<string, string> = {
+      [NAME_ORDER_PRESETS[0]]: "James Bond",
+      [NAME_ORDER_PRESETS[1]]: "Bond James",
+      [NAME_ORDER_PRESETS[2]]: "James Bond (007)",
+      [NAME_ORDER_PRESETS[3]]: "007",
+    };
+
     if (!vaultSettings) return null;
+
+    const hasNameOrderOverride = vaultSettings.name_order !== null && vaultSettings.name_order !== undefined;
+    const activeNameOrderTemplate = nameOrderTemplate === CUSTOM_SENTINEL ? customNameOrderTemplate : nameOrderTemplate;
+    const canSaveNameOrder = nameOrderMode === "override" && activeNameOrderTemplate.trim().length > 0;
+
 
     return (
       <Space direction="vertical" style={{ width: "100%" }}>
@@ -204,9 +308,108 @@ export default function VaultSettings() {
             ))}
           </Select>
         </Card>
+        <Card title={t("vault_settings.name_order_override_title")}>
+          <Text type="secondary" style={{ display: "block", marginBottom: 24 }}>
+            {t("vault_settings.name_order_override_description")}
+          </Text>
+
+          <Radio.Group
+            value={nameOrderMode}
+            onChange={(e) => setNameOrderMode(e.target.value)}
+            style={{ display: "flex", flexDirection: "column", gap: 16, marginBottom: 24 }}
+          >
+            <Radio value="global">
+              <span style={{ fontWeight: 500 }}>{t("vault_settings.name_order_global")}</span>
+              <div style={{ color: token.colorTextSecondary, fontSize: 13, marginTop: 4 }}>
+                {t("vault_settings.name_order_global_help", { template: nameOrder })}
+              </div>
+            </Radio>
+            <Radio value="override">
+              <span style={{ fontWeight: 500 }}>{t("vault_settings.name_order_override")}</span>
+            </Radio>
+          </Radio.Group>
+
+          {nameOrderMode === "global" && hasNameOrderOverride && (
+            <Button
+              loading={updateNameOrderMutation.isPending}
+              onClick={() => updateNameOrderMutation.mutate(undefined)}
+              style={{ marginBottom: 16 }}
+            >
+              {t("vault_settings.name_order_clear")}
+            </Button>
+          )}
+
+          {nameOrderMode === "override" && (
+            <div style={{ paddingLeft: 24, borderLeft: `2px solid ${token.colorBorder}`, marginLeft: 8 }}>
+              <Radio.Group
+                value={nameOrderTemplate}
+                onChange={(e) => setNameOrderTemplate(e.target.value as string)}
+                style={{ display: "flex", flexDirection: "column", gap: 8 }}
+              >
+                {NAME_ORDER_PRESETS.map((preset) => (
+                  <Radio key={preset} value={preset}>
+                    <span style={{ fontWeight: 500 }}>{presetLabels[preset]}</span>
+                    <Text type="secondary" style={{ marginLeft: 8, fontSize: 13 }}>
+                      — {presetExamples[preset]}
+                    </Text>
+                  </Radio>
+                ))}
+                <Radio value={CUSTOM_SENTINEL}>
+                  <span style={{ fontWeight: 500 }}>
+                    {t("settings.preferences.name_order_custom")}
+                  </span>
+                </Radio>
+              </Radio.Group>
+
+              {nameOrderTemplate === CUSTOM_SENTINEL && (
+                <div style={{ marginTop: 12, paddingLeft: 24 }}>
+                  <Input
+                    value={customNameOrderTemplate}
+                    onChange={(e) => setCustomNameOrderTemplate(e.target.value)}
+                    placeholder="%first_name% %last_name%"
+                    style={{ marginBottom: 8, maxWidth: 400 }}
+                  />
+                  <Text type="secondary" style={{ fontSize: 12, display: "block" }}>
+                    {t("settings.preferences.name_order_custom_help")}
+                  </Text>
+                </div>
+              )}
+
+              <Text type="secondary" style={{ display: "block", fontSize: 12, marginTop: 12 }}>
+                {t("vault_settings.name_order_condition_help")}
+              </Text>
+
+              <div style={{ marginTop: 16, padding: "8px 12px", background: token.colorFillQuaternary, borderRadius: token.borderRadius, display: "flex", alignItems: "center", gap: 8, width: "fit-content" }}>
+                <Text type="secondary" style={{ fontSize: 13 }}>{t("settings.preferences.name_order_preview")}:</Text>
+                <Text strong style={{ fontSize: 14 }}>{formatContactName(activeNameOrderTemplate, SAMPLE_CONTACT)}</Text>
+              </div>
+
+              <Space style={{ marginTop: 16 }}>
+                <Button
+                  type="primary"
+                  icon={<SaveOutlined />}
+                  loading={updateNameOrderMutation.isPending}
+                  disabled={!canSaveNameOrder}
+                  onClick={() => updateNameOrderMutation.mutate(activeNameOrderTemplate.trim())}
+                >
+                  {t("vault_settings.name_order_save")}
+                </Button>
+                {hasNameOrderOverride && (
+                  <Button
+                    loading={updateNameOrderMutation.isPending}
+                    onClick={() => updateNameOrderMutation.mutate(undefined)}
+                  >
+                    {t("vault_settings.name_order_clear")}
+                  </Button>
+                )}
+              </Space>
+            </div>
+          )}
+        </Card>
       </Space>
     );
   };
+
 
   const TabsTab = () => {
     if (!vaultSettings) return null;
@@ -661,7 +864,236 @@ export default function VaultSettings() {
       </Space>
     );
   };
-  
+
+  const QuickFactTemplatesTab = () => {
+    const queryKey = ["vault", vaultId, "quickFactTemplates"];
+    const { data: items = [], isLoading } = useQuery({
+      queryKey,
+      queryFn: async () => (await api.vaultSettings.settingsQuickFactTemplatesList(String(vaultId))).data ?? [],
+    });
+
+    const [form] = Form.useForm<QuickFactTemplateFormValues>();
+    const [editingId, setEditingId] = useState<number | null>(null);
+    const watchedFieldType = Form.useWatch("field_type", form);
+    const selectedFieldType = normalizeQuickFactFieldType(watchedFieldType);
+
+    const buildRequest = (values: QuickFactTemplateFormValues): CreateQuickFactTemplateRequest => {
+      const fieldType = normalizeQuickFactFieldType(values.field_type);
+      const helpText = values.help_text?.trim();
+      const defaultValue = values.default_value?.trim();
+      const request: CreateQuickFactTemplateRequest = {
+        label: values.label.trim(),
+        field_type: fieldType,
+        required: Boolean(values.required),
+        help_text: helpText || undefined,
+        select_options: fieldType === "select" ? parseSelectOptions(values.select_options) : undefined,
+      };
+
+      if (isQuickFactScalarFieldType(fieldType) && defaultValue) {
+        request.default_value = defaultValue;
+      }
+
+      return request;
+    };
+
+    const createMutation = useMutation({
+      mutationFn: (data: CreateQuickFactTemplateRequest) => api.vaultSettings.settingsQuickFactTemplatesCreate(String(vaultId), data),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey });
+        message.success(t("common.created"));
+        form.resetFields();
+      },
+      onError: (e: APIError) => message.error(e.message),
+    });
+
+    const updateMutation = useMutation({
+      mutationFn: ({ id, data }: { id: number; data: UpdateQuickFactTemplateRequest }) =>
+        api.vaultSettings.settingsQuickFactTemplatesUpdate(String(vaultId), id, data),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey });
+        message.success(t("common.updated"));
+        setEditingId(null);
+        form.resetFields();
+      },
+      onError: (e: APIError) => message.error(e.message),
+    });
+
+    const deleteMutation = useMutation({
+      mutationFn: (id: number) => api.vaultSettings.settingsQuickFactTemplatesDelete(String(vaultId), id),
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey });
+        message.success(t("common.deleted"));
+      },
+      onError: (e: APIError) => message.error(e.message),
+    });
+
+    const onFinish = (values: QuickFactTemplateFormValues) => {
+      const request = buildRequest(values);
+      if (editingId) {
+        updateMutation.mutate({ id: editingId, data: request });
+      } else {
+        createMutation.mutate(request);
+      }
+    };
+
+    const startEdit = (item: QuickFactTemplateResponse) => {
+      if (!item.id) return;
+      const fieldType = normalizeQuickFactFieldType(item.field_type);
+      setEditingId(item.id);
+      form.setFieldsValue({
+        label: item.label ?? "",
+        field_type: fieldType,
+        required: item.required ?? false,
+        help_text: item.help_text ?? "",
+        default_value: isQuickFactScalarFieldType(fieldType) ? item.default_value ?? "" : "",
+        select_options: fieldType === "select" ? (item.select_options ?? []).join("\n") : "",
+      });
+    };
+
+    const cancelEdit = () => {
+      setEditingId(null);
+      form.resetFields();
+    };
+
+    const fieldTypeOptions = QUICK_FACT_FIELD_TYPES.map((fieldType) => ({
+      value: fieldType,
+      label: t(`vault_settings.quick_fact_templates.type_${fieldType}`),
+    }));
+
+    return (
+      <Space direction="vertical" style={{ width: "100%" }}>
+        <Card title={editingId ? t("vault_settings.quick_fact_templates.edit_title") : t("vault_settings.quick_fact_templates.add_title")}>
+          <Form<QuickFactTemplateFormValues>
+            form={form}
+            layout="vertical"
+            onFinish={onFinish}
+            initialValues={{ field_type: "text", required: false }}
+          >
+            <Form.Item
+              name="label"
+              label={t("vault_settings.quick_fact_templates.label")}
+              rules={[{ required: true, message: t("common.required") }]}
+            >
+              <Input placeholder={t("vault_settings.quick_fact_templates.label_placeholder")} />
+            </Form.Item>
+
+            <Form.Item
+              name="field_type"
+              label={t("vault_settings.quick_fact_templates.field_type")}
+              rules={[{ required: true, message: t("common.required") }]}
+            >
+              <Select options={fieldTypeOptions} />
+            </Form.Item>
+
+            <Form.Item name="required" label={t("vault_settings.quick_fact_templates.required")} valuePropName="checked">
+              <Switch />
+            </Form.Item>
+
+            <Form.Item name="help_text" label={t("vault_settings.quick_fact_templates.help_text")}>
+              <Input.TextArea rows={2} placeholder={t("vault_settings.quick_fact_templates.help_text_placeholder")} />
+            </Form.Item>
+
+            {isQuickFactScalarFieldType(selectedFieldType) && (
+              <Form.Item name="default_value" label={t("vault_settings.quick_fact_templates.default_value")}>
+                <Input placeholder={t("vault_settings.quick_fact_templates.default_value_placeholder")} />
+              </Form.Item>
+            )}
+
+            {selectedFieldType === "select" && (
+              <Form.Item
+                name="select_options"
+                label={t("vault_settings.quick_fact_templates.select_options")}
+                extra={t("vault_settings.quick_fact_templates.option_per_line")}
+                rules={[
+                  {
+                    validator: async (_rule, value: unknown) => {
+                      const text = typeof value === "string" ? value : "";
+                      if (parseSelectOptions(text).length === 0) {
+                        throw new Error(t("vault_settings.quick_fact_templates.select_options_required"));
+                      }
+                    },
+                  },
+                ]}
+              >
+                <Input.TextArea rows={4} placeholder={t("vault_settings.quick_fact_templates.select_options_placeholder")} />
+              </Form.Item>
+            )}
+
+            <Form.Item>
+              <Space>
+                <Button type="primary" htmlType="submit" loading={createMutation.isPending || updateMutation.isPending}>
+                  {editingId ? t("common.update") : t("common.add")}
+                </Button>
+                {editingId && <Button onClick={cancelEdit}>{t("common.cancel")}</Button>}
+              </Space>
+            </Form.Item>
+          </Form>
+        </Card>
+
+        <Card title={t("vault_settings.quick_fact_templates.list_title")}>
+          <List<QuickFactTemplateResponse>
+            loading={isLoading}
+            dataSource={items}
+            renderItem={(item, index) => {
+              const fieldType = normalizeQuickFactFieldType(item.field_type);
+              return (
+                <List.Item
+                  actions={[
+                    <Button
+                      key="up"
+                      size="small"
+                      icon={<ArrowUpOutlined />}
+                      title={t("vault_settings.move_up")}
+                      disabled={index === 0 || !item.id}
+                      onClick={() => item.id && positionMutation.mutate({ entityType: "quickFactTemplates", id: item.id, position: index - 1 })}
+                    />,
+                    <Button
+                      key="down"
+                      size="small"
+                      icon={<ArrowDownOutlined />}
+                      title={t("vault_settings.move_down")}
+                      disabled={index === items.length - 1 || !item.id}
+                      onClick={() => item.id && positionMutation.mutate({ entityType: "quickFactTemplates", id: item.id, position: index + 1 })}
+                    />,
+                    <Button key="edit" icon={<EditOutlined />} onClick={() => startEdit(item)} disabled={!item.id} />,
+                    <Popconfirm key="del" title={t("common.delete_confirm")} onConfirm={() => item.id && deleteMutation.mutate(item.id)}>
+                      <Button danger icon={<DeleteOutlined />} disabled={!item.id} />
+                    </Popconfirm>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={
+                      <Space wrap>
+                        <Text strong>{item.label}</Text>
+                        <Tag>{t(`vault_settings.quick_fact_templates.type_${fieldType}`)}</Tag>
+                        {item.required && <Tag color="red">{t("vault_settings.quick_fact_templates.required")}</Tag>}
+                      </Space>
+                    }
+                    description={
+                      <Space direction="vertical" size={2}>
+                        {item.help_text && <Text type="secondary">{item.help_text}</Text>}
+                        {isQuickFactScalarFieldType(fieldType) && item.default_value && (
+                          <Text type="secondary">
+                            {t("vault_settings.quick_fact_templates.default_value")}: {item.default_value}
+                          </Text>
+                        )}
+                        {fieldType === "select" && (item.select_options?.length ?? 0) > 0 && (
+                          <Text type="secondary">
+                            {t("vault_settings.quick_fact_templates.select_options")}: {(item.select_options ?? []).join(", ")}
+                          </Text>
+                        )}
+                      </Space>
+                    }
+                  />
+                </List.Item>
+              );
+            }}
+          />
+        </Card>
+      </Space>
+    );
+  };
+
   // Life Event Categories - Nested CRUD
   const LifeEventsTab = () => {
     const queryKey = ["vault", vaultId, "lifeEventCategories"];
@@ -1188,15 +1620,7 @@ export default function VaultSettings() {
         positionEntityType="moodParams"
     /> },
     { key: "lifeEvents", label: t("vault_settings.life_events"), children: <LifeEventsTab /> },
-    { key: "quickFacts", label: t("vault_settings.quick_facts"), children: <SimpleCrudTab 
-        queryKeySuffix="quickFactTemplates"
-        apiList={(vid) => api.vaultSettings.settingsQuickFactTemplatesList(String(vid))}
-        apiCreate={(vid, data) => api.vaultSettings.settingsQuickFactTemplatesCreate(String(vid), data as unknown as import("@/api/generated/data-contracts").GithubComNaibaBondsInternalDtoCreateQuickFactTemplateRequest)}
-        apiUpdate={(vid, id, data) => api.vaultSettings.settingsQuickFactTemplatesUpdate(String(vid), id, data as unknown as import("@/api/generated/data-contracts").GithubComNaibaBondsInternalDtoUpdateQuickFactTemplateRequest)}
-        apiDelete={(vid, id) => api.vaultSettings.settingsQuickFactTemplatesDelete(String(vid), id)}
-        title={t("vault_settings.quick_facts")}
-        positionEntityType="quickFactTemplates"
-    /> },
+    { key: "quickFacts", label: t("vault_settings.quick_facts"), children: <QuickFactTemplatesTab /> },
     { key: "csv_import", label: t("vault_settings.csv_import.tab_label"), children: <CSVImportTab /> },
     { key: "import", label: t("vault_settings.monica_import.tab_label"), children: <MonicaImportTab /> },
   ];

@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { formatContactName, useNameOrder } from "@/utils/nameFormat";
+import { formatContactName, useVaultNameOrder } from "@/utils/nameFormat";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -14,9 +14,31 @@ import {
   ArrowLeftOutlined,
 } from "@ant-design/icons";
 import { api } from "@/api";
+import type { Reminder } from "@/api";
 import { useDateFormat, formatDate, formatShortDate } from "@/utils/dateFormat";
 
 const { Title, Text } = Typography;
+
+type VaultReminderItem = Reminder & {
+  first_name?: string | null;
+  last_name?: string | null;
+  contact_first_name?: string | null;
+  contact_last_name?: string | null;
+  contact_name?: string | null;
+};
+
+function getReminderContactName(nameOrder: string, record: VaultReminderItem): string {
+  const formattedName = record.contact_name?.trim();
+  if (formattedName) return formattedName;
+
+  const contactNameFromRecord = formatContactName(nameOrder, record);
+  if (contactNameFromRecord !== "Unknown") return contactNameFromRecord;
+
+  return [record.contact_first_name, record.contact_last_name]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
 
 export default function VaultReminders() {
   const { id } = useParams<{ id: string }>();
@@ -24,7 +46,7 @@ export default function VaultReminders() {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { token } = theme.useToken();
-  const nameOrder = useNameOrder();
+  const nameOrder = useVaultNameOrder(vaultId);
   const dateFormats = useDateFormat();
 
   const frequencyLabels: Record<string, string> = {
@@ -34,7 +56,7 @@ export default function VaultReminders() {
     recurring_year: t("modules.reminders.freq_yearly"),
   };
 
-  const { data: reminders = [], isLoading } = useQuery({
+  const { data: reminders = [], isLoading } = useQuery<VaultReminderItem[]>({
     queryKey: ["vaults", vaultId, "reminders"],
     queryFn: async () => {
       const res = await api.reminders.remindersList(String(vaultId));
@@ -56,8 +78,7 @@ export default function VaultReminders() {
         <Title level={4} style={{ margin: 0 }}>{t("vault.reminders.title")}</Title>
       </div>
 
-      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-      <Table<any>
+      <Table<VaultReminderItem>
         dataSource={reminders}
         rowKey="id"
         loading={isLoading}
@@ -88,7 +109,7 @@ export default function VaultReminders() {
                   navigate(`/vaults/${vaultId}/contacts/${record.contact_id}`);
                 }}
               >
-                {formatContactName(nameOrder, { first_name: record.contact_first_name, last_name: record.contact_last_name })}
+                {getReminderContactName(nameOrder, record)}
               </a>
             ),
           },

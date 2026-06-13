@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { formatContactName, formatContactInitials, useNameOrder } from "@/utils/nameFormat";
+import { formatContactName, formatContactInitials, useVaultNameOrder } from "@/utils/nameFormat";
 import { useDateFormat, formatDate } from "@/utils/dateFormat";
 import { dateInputToTimestamp, formatDateOnly, timestampToDateInput } from "@/utils/dateOnlyInput";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
@@ -51,6 +51,7 @@ import TasksModule from "./modules/TasksModule";
 import CallsModule from "./modules/CallsModule";
 import AddressesModule from "./modules/AddressesModule";
 import ContactInfoModule from "./modules/ContactInfoModule";
+import GiftsModule from "./modules/GiftsModule";
 import LoansModule from "./modules/LoansModule";
 import PetsModule from "./modules/PetsModule";
 import RelationshipsModule from "./modules/RelationshipsModule";
@@ -117,6 +118,7 @@ const MODULE_COMPONENT_MAP: Record<
   calls: CallsModule,
   reminders: RemindersModule,
   loans: LoansModule,
+  gifts: GiftsModule,
   goals: GoalsModule,
   life_events: LifeEventsModule,
   groups: GroupsModule,
@@ -135,7 +137,7 @@ export default function ContactDetail() {
   const { message } = App.useApp();
   const { t } = useTranslation();
   const { token } = theme.useToken();
-  const nameOrder = useNameOrder();
+  const nameOrder = useVaultNameOrder(vaultId);
   const dateFormats = useDateFormat();
   const [viewMode, setViewMode] = useState<"read" | "edit">("read");
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -833,7 +835,16 @@ export default function ContactDetail() {
               name="first_name"
               label={t("contact.detail.first_name")}
               style={{ flex: 2 }}
-              rules={[{ required: true, message: t("common.required") }]}
+              dependencies={["nickname"]}
+              rules={[{
+                validator: (_, value) => {
+                  const nickname = editForm.getFieldValue("nickname");
+                  if (!value?.trim() && !nickname?.trim()) {
+                    return Promise.reject(new Error(t("contact.form.name_or_nickname_required")));
+                  }
+                  return Promise.resolve();
+                },
+              }]}
             >
               <Input />
             </Form.Item>
@@ -866,6 +877,16 @@ export default function ContactDetail() {
               name="nickname"
               label={t("contact.detail.nickname")}
               style={{ flex: 1 }}
+              dependencies={["first_name"]}
+              rules={[{
+                validator: (_, value) => {
+                  const firstName = editForm.getFieldValue("first_name");
+                  if (!value?.trim() && !firstName?.trim()) {
+                    return Promise.reject(new Error(t("contact.form.name_or_nickname_required")));
+                  }
+                  return Promise.resolve();
+                },
+              }]}
             >
               <Input />
             </Form.Item>

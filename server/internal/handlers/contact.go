@@ -66,8 +66,9 @@ func (h *ContactHandler) List(c echo.Context) error {
 //	@Router			/vaults/{vault_id}/dashboard/catchUp [get]
 func (h *ContactHandler) ListCatchUpPrompts(c echo.Context) error {
 	vaultID := c.Param("vault_id")
+	userID := middleware.GetUserID(c)
 
-	prompts, err := h.contactService.ListCatchUpPrompts(vaultID)
+	prompts, err := h.contactService.ListCatchUpPrompts(vaultID, userID)
 	if err != nil {
 		return response.InternalError(c, "err.failed_to_list_catch_up_prompts")
 	}
@@ -145,6 +146,9 @@ func (h *ContactHandler) Create(c echo.Context) error {
 		if errors.Is(err, services.ErrContactNotFound) {
 			return response.NotFound(c, "err.contact_not_found")
 		}
+		if errors.Is(err, services.ErrContactNameRequired) {
+			return response.ValidationError(c, map[string]string{"validation": err.Error()})
+		}
 		return response.InternalError(c, "err.failed_to_create_contact")
 	}
 	return response.Created(c, contact)
@@ -200,6 +204,7 @@ func (h *ContactHandler) Get(c echo.Context) error {
 func (h *ContactHandler) Update(c echo.Context) error {
 	contactID := c.Param("id")
 	vaultID := c.Param("vault_id")
+	userID := middleware.GetUserID(c)
 
 	var req dto.UpdateContactRequest
 	if err := c.Bind(&req); err != nil {
@@ -209,10 +214,13 @@ func (h *ContactHandler) Update(c echo.Context) error {
 		return response.ValidationError(c, map[string]string{"validation": err.Error()})
 	}
 
-	contact, err := h.contactService.UpdateContact(contactID, vaultID, req)
+	contact, err := h.contactService.UpdateContact(contactID, vaultID, userID, req)
 	if err != nil {
 		if errors.Is(err, services.ErrContactNotFound) {
 			return response.NotFound(c, "err.contact_not_found")
+		}
+		if errors.Is(err, services.ErrContactNameRequired) {
+			return response.ValidationError(c, map[string]string{"validation": err.Error()})
 		}
 		return response.InternalError(c, "err.failed_to_update_contact")
 	}
@@ -236,8 +244,9 @@ func (h *ContactHandler) Update(c echo.Context) error {
 func (h *ContactHandler) MarkCaughtUp(c echo.Context) error {
 	contactID := c.Param("contact_id")
 	vaultID := c.Param("vault_id")
+	userID := middleware.GetUserID(c)
 
-	contact, err := h.contactService.MarkCaughtUp(contactID, vaultID)
+	contact, err := h.contactService.MarkCaughtUp(contactID, vaultID, userID)
 	if err != nil {
 		if errors.Is(err, services.ErrContactNotFound) {
 			return response.NotFound(c, "err.contact_not_found")
@@ -290,7 +299,8 @@ func (h *ContactHandler) Delete(c echo.Context) error {
 func (h *ContactHandler) ToggleArchive(c echo.Context) error {
 	contactID := c.Param("id")
 	vaultID := c.Param("vault_id")
-	contact, err := h.contactService.ToggleArchive(contactID, vaultID)
+	userID := middleware.GetUserID(c)
+	contact, err := h.contactService.ToggleArchive(contactID, vaultID, userID)
 	if err != nil {
 		if errors.Is(err, services.ErrContactNotFound) {
 			return response.NotFound(c, "err.contact_not_found")
@@ -347,6 +357,7 @@ func (h *ContactHandler) ToggleFavorite(c echo.Context) error {
 //	@Router			/vaults/{vault_id}/search/contacts [post]
 func (h *ContactHandler) QuickSearch(c echo.Context) error {
 	vaultID := c.Param("vault_id")
+	userID := middleware.GetUserID(c)
 
 	var req dto.ContactSearchRequest
 	if err := c.Bind(&req); err != nil {
@@ -356,7 +367,7 @@ func (h *ContactHandler) QuickSearch(c echo.Context) error {
 		return response.ValidationError(c, map[string]string{"validation": err.Error()})
 	}
 
-	results, err := h.contactService.QuickSearch(vaultID, req.SearchTerm)
+	results, err := h.contactService.QuickSearch(vaultID, req.SearchTerm, userID)
 	if err != nil {
 		return response.InternalError(c, "err.failed_to_search_contacts")
 	}

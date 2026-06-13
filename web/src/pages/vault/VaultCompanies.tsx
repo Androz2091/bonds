@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { formatContactName, useNameOrder } from "@/utils/nameFormat";
+import { formatContactName, useVaultNameOrder } from "@/utils/nameFormat";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -33,13 +33,18 @@ import type { Company, APIError } from "@/api";
 
 const { Title, Text } = Typography;
 
+function formatCompanyEmployeeName(nameOrder: string, employee: { name?: string | null; first_name?: string | null; last_name?: string | null }) {
+  const backendName = employee.name?.trim();
+  return backendName || formatContactName(nameOrder, employee);
+}
+
 export default function VaultCompanies({ vaultId }: { vaultId: string }) {
   const navigate = useNavigate();
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { token } = theme.useToken();
   const { message } = App.useApp();
-  const nameOrder = useNameOrder();
+  const nameOrder = useVaultNameOrder(vaultId);
   const [form] = Form.useForm();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
@@ -231,7 +236,7 @@ export default function VaultCompanies({ vaultId }: { vaultId: string }) {
                         navigate(`/vaults/${vaultId}/contacts/${contact.id}`);
                       }}
                     >
-                      {formatContactName(nameOrder, contact)}
+                      {formatCompanyEmployeeName(nameOrder, contact)}
                     </span>
                   </Tag>
                 ))}
@@ -379,7 +384,7 @@ export default function VaultCompanies({ vaultId }: { vaultId: string }) {
                         updatedAt={item.updated_at}
                       />
                     }
-                    title={formatContactName(nameOrder, item)}
+                    title={formatCompanyEmployeeName(nameOrder, item)}
                     description={item.job_position || "—"}
                     />
                 </List.Item>

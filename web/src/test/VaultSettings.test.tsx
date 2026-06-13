@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
+import * as nameFormat from "@/utils/nameFormat";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { App as AntApp, ConfigProvider } from "antd";
 import VaultSettings from "@/pages/vault/VaultSettings";
@@ -87,6 +89,48 @@ function renderVaultSettings() {
 }
 
 describe("VaultSettings", () => {
+  beforeEach(() => {
+    vi.spyOn(nameFormat, "useNameOrder").mockReturnValue("%first_name% %last_name%");
+    vi.spyOn(nameFormat, "useVaultNameOrder").mockReturnValue("%first_name% %last_name%");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    mockUseQuery.mockReset();
+  });
+
+  it("renders General tab with Name display order card", async () => {
+    mockUseQuery.mockImplementation((opts: { queryKey: unknown[] }) => {
+      if (Array.isArray(opts.queryKey) && opts.queryKey[0] === "vault") {
+        return {
+          data: {
+            name: "My Vault",
+            description: "desc",
+            default_template_id: 1,
+            name_order: "%nickname%",
+            effective_name_order: "%nickname%",
+            show_group_tab: true,
+            show_tasks_tab: true,
+            show_files_tab: true,
+            show_journal_tab: true,
+            show_companies_tab: true,
+            show_reports_tab: true,
+            show_calendar_tab: true,
+          },
+          isLoading: false,
+        };
+      }
+      return { data: [], isLoading: false };
+    });
+
+    renderVaultSettings();
+
+    expect(await screen.findByText("Name display order")).toBeInTheDocument();
+    expect(screen.getAllByText("Use global preference").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/\{nickname\? \(%nickname%\)\}/)).toBeInTheDocument();
+    expect(screen.getByText("Save override")).toBeInTheDocument();
+  });
+
   it("renders settings title", () => {
     mockUseQuery.mockReturnValue({ data: undefined, isLoading: true });
     renderVaultSettings();
@@ -121,5 +165,55 @@ describe("VaultSettings", () => {
     expect(screen.getAllByText("General").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Users")).toBeInTheDocument();
     expect(screen.getByText("Labels")).toBeInTheDocument();
+  });
+
+  it("renders typed quick fact templates", async () => {
+    const user = userEvent.setup();
+    mockUseQuery.mockImplementation((opts: { queryKey: unknown[] }) => {
+      if (Array.isArray(opts.queryKey) && opts.queryKey[0] === "vault" && opts.queryKey[2] === "quickFactTemplates") {
+        return {
+          data: [
+            {
+              id: 1,
+              label: "Diet preference",
+              field_type: "select",
+              required: true,
+              help_text: "Ask before cooking",
+              default_value: "No preference",
+              select_options: ["Vegetarian", "No preference"],
+            },
+          ],
+          isLoading: false,
+        };
+      }
+      if (Array.isArray(opts.queryKey) && opts.queryKey[0] === "vault") {
+        return {
+          data: {
+            name: "My Vault",
+            description: "desc",
+            default_template_id: 1,
+            show_group_tab: true,
+            show_tasks_tab: true,
+            show_files_tab: true,
+            show_journal_tab: true,
+            show_companies_tab: true,
+            show_reports_tab: true,
+            show_calendar_tab: true,
+          },
+          isLoading: false,
+        };
+      }
+      return { data: [], isLoading: false };
+    });
+
+    renderVaultSettings();
+
+    await user.click(screen.getByText("Quick Fact Templates"));
+
+    expect(await screen.findByText("Add quick fact template")).toBeInTheDocument();
+    expect(screen.getByText("Configured templates")).toBeInTheDocument();
+    expect(screen.getByText("Diet preference")).toBeInTheDocument();
+    expect(screen.getByText("Ask before cooking")).toBeInTheDocument();
+    expect(screen.getByText(/Vegetarian, No preference/)).toBeInTheDocument();
   });
 });

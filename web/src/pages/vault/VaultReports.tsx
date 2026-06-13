@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from "react-router-dom";
-import { formatContactName, useNameOrder } from "@/utils/nameFormat";
+import { formatContactName, useVaultNameOrder } from "@/utils/nameFormat";
 import {
   Card,
   Typography,
@@ -32,13 +32,39 @@ import type {
 
 const { Title, Text } = Typography;
 
+type AddressContactReportItem = AddressContactItem & {
+  contact_name?: string | null;
+  middle_name?: string | null;
+  nickname?: string | null;
+  maiden_name?: string | null;
+  prefix?: string | null;
+  suffix?: string | null;
+};
+
+type ImportantDateContactReportItem = ImportantDateReportItem & {
+  contact_name?: string | null;
+  middle_name?: string | null;
+  nickname?: string | null;
+  maiden_name?: string | null;
+  prefix?: string | null;
+  suffix?: string | null;
+};
+
+function getReportContactName(
+  nameOrder: string,
+  item: AddressContactReportItem | ImportantDateContactReportItem,
+): string {
+  const formattedName = item.contact_name?.trim();
+  return formattedName || formatContactName(nameOrder, item);
+}
+
 export default function VaultReports() {
   const { id } = useParams<{ id: string }>();
   const vaultId = id!;
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { token } = theme.useToken();
-  const nameOrder = useNameOrder();
+  const nameOrder = useVaultNameOrder(vaultId);
 
   // Queries
   const { data: reportOverview } = useQuery({
@@ -62,7 +88,7 @@ export default function VaultReports() {
     queryKey: ["vault", vaultId, "reports", "importantDates"],
     queryFn: async () => {
       const res = await api.reports.reportsImportantDatesList(vaultId);
-      return (res.data ?? []) as ImportantDateReportItem[];
+      return (res.data ?? []) as ImportantDateContactReportItem[];
     },
   });
 
@@ -89,10 +115,10 @@ export default function VaultReports() {
       queryFn: async () => {
         if (record.city) {
           const res = await api.reports.reportsAddressesCityDetail(vaultId, record.city);
-          return (res.data ?? []) as AddressContactItem[];
+          return (res.data ?? []) as AddressContactReportItem[];
         } else if (record.country) {
           const res = await api.reports.reportsAddressesCountryDetail(vaultId, record.country);
-          return (res.data ?? []) as AddressContactItem[];
+          return (res.data ?? []) as AddressContactReportItem[];
         }
         return [];
       },
@@ -117,7 +143,7 @@ export default function VaultReports() {
               key: "name",
               render: (_, item) => (
                 <a onClick={() => navigate(`/vaults/${vaultId}/contacts/${item.contact_id}`)}>
-                  {formatContactName(nameOrder, item)}
+                  {getReportContactName(nameOrder, item)}
                 </a>
               ),
             },
@@ -249,7 +275,7 @@ export default function VaultReports() {
                     key: "contact",
                     render: (_, r) => (
                       <a onClick={() => navigate(`/vaults/${vaultId}/contacts/${r.contact_id}`)}>
-                        {formatContactName(nameOrder, r)}
+                        {getReportContactName(nameOrder, r)}
                       </a>
                     ),
                   },

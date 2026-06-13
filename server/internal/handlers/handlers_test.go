@@ -21,6 +21,8 @@ import (
 	"github.com/naiba/bonds/internal/models"
 	"github.com/naiba/bonds/internal/services"
 	"github.com/naiba/bonds/internal/testutil"
+	"github.com/naiba/bonds/internal/utils"
+	"github.com/naiba/bonds/pkg/avatar"
 	"github.com/pquerna/otp/totp"
 	"gorm.io/gorm"
 )
@@ -157,6 +159,10 @@ func (ts *testServer) doRequest(method, path, body string, token string) *httpte
 }
 
 func (ts *testServer) doMultipartUpload(t *testing.T, path, token, fieldName, fileName, mimeType string, fileData []byte) *httptest.ResponseRecorder {
+	return ts.doMultipartUploadWithMethod(t, http.MethodPost, path, token, fieldName, fileName, mimeType, fileData)
+}
+
+func (ts *testServer) doMultipartUploadWithMethod(t *testing.T, method, path, token, fieldName, fileName, mimeType string, fileData []byte) *httptest.ResponseRecorder {
 	t.Helper()
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
@@ -172,7 +178,7 @@ func (ts *testServer) doMultipartUpload(t *testing.T, path, token, fieldName, fi
 	}
 	writer.Close()
 
-	req := httptest.NewRequest(http.MethodPost, path, &buf)
+	req := httptest.NewRequest(method, path, &buf)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -738,6 +744,47 @@ func TestContactCreate_Success(t *testing.T) {
 	}
 }
 
+func TestContactCreate_NicknameOnlySuccess(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "ccreate-nickname-only@example.com")
+	vault := ts.createTestVault(t, token, "Nickname Contact Vault")
+
+	rec := ts.doRequest(http.MethodPost, "/api/vaults/"+vault.ID+"/contacts",
+		`{"first_name":"","nickname":"Handle"}`, token)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	var data contactData
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to parse contact data: %v", err)
+	}
+	if data.FirstName != "" {
+		t.Fatalf("expected empty first_name, got %q", data.FirstName)
+	}
+	if data.Nickname != "Handle" {
+		t.Fatalf("expected nickname Handle, got %q", data.Nickname)
+	}
+}
+
+func TestContactCreate_BlankFirstNameAndNicknameValidationError(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "ccreate-blank-name@example.com")
+	vault := ts.createTestVault(t, token, "Blank Contact Vault")
+
+	rec := ts.doRequest(http.MethodPost, "/api/vaults/"+vault.ID+"/contacts",
+		`{"first_name":"   ","nickname":"\t"}`, token)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	if resp.Error == nil || resp.Error.Code != "VALIDATION_ERROR" {
+		t.Fatalf("expected VALIDATION_ERROR, got %+v", resp.Error)
+	}
+}
+
 func TestContactCreate_FirstMetThroughMissingReturnsNotFound(t *testing.T) {
 	ts := setupTestServer(t)
 	token, _ := ts.registerTestUser(t, "ccreate-missing-first-met@example.com")
@@ -938,6 +985,49 @@ func TestContactUpdate_Success(t *testing.T) {
 	}
 	if data.Suffix != "Sr." {
 		t.Errorf("expected suffix=Sr., got %s", data.Suffix)
+	}
+}
+
+func TestContactUpdate_NicknameOnlySuccess(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "cupdate-nickname-only@example.com")
+	vault := ts.createTestVault(t, token, "Update Nickname Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "OldName")
+
+	rec := ts.doRequest(http.MethodPut, "/api/vaults/"+vault.ID+"/contacts/"+contact.ID,
+		`{"first_name":"","nickname":"Updated Handle"}`, token)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	var data contactData
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to parse contact data: %v", err)
+	}
+	if data.FirstName != "" {
+		t.Fatalf("expected empty first_name, got %q", data.FirstName)
+	}
+	if data.Nickname != "Updated Handle" {
+		t.Fatalf("expected nickname Updated Handle, got %q", data.Nickname)
+	}
+}
+
+func TestContactUpdate_BlankFirstNameAndNicknameValidationError(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "cupdate-blank-name@example.com")
+	vault := ts.createTestVault(t, token, "Update Blank Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "OldName")
+
+	rec := ts.doRequest(http.MethodPut, "/api/vaults/"+vault.ID+"/contacts/"+contact.ID,
+		`{"first_name":"   ","nickname":"\n"}`, token)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	if resp.Error == nil || resp.Error.Code != "VALIDATION_ERROR" {
+		t.Fatalf("expected VALIDATION_ERROR, got %+v", resp.Error)
 	}
 }
 
@@ -1556,6 +1646,194 @@ func TestLoanToggle_Success(t *testing.T) {
 	}
 }
 
+// ==================== Gifts ====================
+
+func TestGiftCRUDLifecycle_Success(t *testing.T) {
+	ts := setupTestServer(t)
+	token, auth := ts.registerTestUser(t, "gift-crud@example.com")
+	vault := ts.createTestVault(t, token, "Gift Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "John")
+	occasionIDs, stateIDs := ts.loadGiftSeedIDs(t, auth.User.AccountID)
+	basePath := "/api/vaults/" + vault.ID + "/contacts/" + contact.ID + "/gifts"
+
+	createBody := fmt.Sprintf(`{"name":"Birthday book","type":"given","description":"Signed edition","estimated_price":2500,"gift_occasion_id":%d,"gift_state_id":%d}`, occasionIDs[0], stateIDs[0])
+	createRec := ts.doRequest(http.MethodPost, basePath, createBody, token)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	createResp := parseResponse(t, createRec)
+	if !createResp.Success {
+		t.Fatal("expected success=true")
+	}
+	var created dto.GiftResponse
+	if err := json.Unmarshal(createResp.Data, &created); err != nil {
+		t.Fatalf("failed to parse created gift: %v", err)
+	}
+	if created.Name != "Birthday book" || created.Type != "given" || created.Description != "Signed edition" {
+		t.Fatalf("unexpected created gift: %+v", created)
+	}
+	if created.GiftOccasionID == nil || *created.GiftOccasionID != occasionIDs[0] {
+		t.Fatalf("expected occasion %d, got %v", occasionIDs[0], created.GiftOccasionID)
+	}
+	if created.GiftStateID == nil || *created.GiftStateID != stateIDs[0] {
+		t.Fatalf("expected state %d, got %v", stateIDs[0], created.GiftStateID)
+	}
+	if created.GiftOccasionLabel == "" || created.GiftStateLabel == "" {
+		t.Fatalf("expected occasion/state labels, got occasion=%q state=%q", created.GiftOccasionLabel, created.GiftStateLabel)
+	}
+
+	listRec := ts.doRequest(http.MethodGet, basePath, "", token)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", listRec.Code, listRec.Body.String())
+	}
+	listResp := parseResponse(t, listRec)
+	var gifts []dto.GiftResponse
+	if err := json.Unmarshal(listResp.Data, &gifts); err != nil {
+		t.Fatalf("failed to parse gift list: %v", err)
+	}
+	if len(gifts) != 1 || gifts[0].ID != created.ID || gifts[0].Name != "Birthday book" {
+		t.Fatalf("expected listed created gift, got %+v", gifts)
+	}
+
+	updateBody := fmt.Sprintf(`{"name":"Anniversary dinner","type":"received","description":"Restaurant voucher","estimated_price":5000,"gift_occasion_id":%d,"gift_state_id":%d}`, occasionIDs[1], stateIDs[1])
+	updateRec := ts.doRequest(http.MethodPut, fmt.Sprintf("%s/%d", basePath, created.ID), updateBody, token)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+	updateResp := parseResponse(t, updateRec)
+	var updated dto.GiftResponse
+	if err := json.Unmarshal(updateResp.Data, &updated); err != nil {
+		t.Fatalf("failed to parse updated gift: %v", err)
+	}
+	if updated.Name != "Anniversary dinner" || updated.Type != "received" {
+		t.Fatalf("unexpected updated gift: %+v", updated)
+	}
+	if updated.GiftOccasionID == nil || *updated.GiftOccasionID != occasionIDs[1] {
+		t.Fatalf("expected updated occasion %d, got %v", occasionIDs[1], updated.GiftOccasionID)
+	}
+	if updated.GiftStateID == nil || *updated.GiftStateID != stateIDs[1] {
+		t.Fatalf("expected updated state %d, got %v", stateIDs[1], updated.GiftStateID)
+	}
+
+	deleteRec := ts.doRequest(http.MethodDelete, fmt.Sprintf("%s/%d", basePath, created.ID), "", token)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+
+	afterDeleteRec := ts.doRequest(http.MethodGet, basePath, "", token)
+	if afterDeleteRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 after delete, got %d: %s", afterDeleteRec.Code, afterDeleteRec.Body.String())
+	}
+	afterDeleteResp := parseResponse(t, afterDeleteRec)
+	var remaining []dto.GiftResponse
+	if err := json.Unmarshal(afterDeleteResp.Data, &remaining); err != nil {
+		t.Fatalf("failed to parse post-delete gift list: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("expected no gifts after delete, got %+v", remaining)
+	}
+}
+
+func TestGiftCreate_ValidationError(t *testing.T) {
+	ts := setupTestServer(t)
+	token, auth := ts.registerTestUser(t, "gift-validation@example.com")
+	vault := ts.createTestVault(t, token, "Gift Validation Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "John")
+	occasionIDs, stateIDs := ts.loadGiftSeedIDs(t, auth.User.AccountID)
+	path := "/api/vaults/" + vault.ID + "/contacts/" + contact.ID + "/gifts"
+
+	body := fmt.Sprintf(`{"type":"given","gift_occasion_id":%d,"gift_state_id":%d}`, occasionIDs[0], stateIDs[0])
+	rec := ts.doRequest(http.MethodPost, path, body, token)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected 422, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	if resp.Error == nil || resp.Error.Code != "VALIDATION_ERROR" {
+		t.Fatalf("expected validation error response, got %+v", resp.Error)
+	}
+	if resp.Error.Details["validation"] == "" {
+		t.Fatalf("expected validation details, got %+v", resp.Error.Details)
+	}
+}
+
+func TestGiftHandlers_NotFoundErrors(t *testing.T) {
+	ts := setupTestServer(t)
+	token, auth := ts.registerTestUser(t, "gift-not-found@example.com")
+	vault := ts.createTestVault(t, token, "Gift Not Found Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "John")
+	occasionIDs, stateIDs := ts.loadGiftSeedIDs(t, auth.User.AccountID)
+	basePath := "/api/vaults/" + vault.ID + "/contacts/" + contact.ID + "/gifts"
+
+	notFoundCases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "missing occasion",
+			body: fmt.Sprintf(`{"name":"Birthday book","type":"given","gift_occasion_id":999999,"gift_state_id":%d}`, stateIDs[0]),
+		},
+		{
+			name: "missing state",
+			body: fmt.Sprintf(`{"name":"Birthday book","type":"given","gift_occasion_id":%d,"gift_state_id":999999}`, occasionIDs[0]),
+		},
+	}
+	for _, tc := range notFoundCases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := ts.doRequest(http.MethodPost, basePath, tc.body, token)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+			}
+			resp := parseResponse(t, rec)
+			if resp.Error == nil || resp.Error.Code != "NOT_FOUND" {
+				t.Fatalf("expected not found response, got %+v", resp.Error)
+			}
+		})
+	}
+
+	validBody := fmt.Sprintf(`{"name":"Birthday book","type":"given","gift_occasion_id":%d,"gift_state_id":%d}`, occasionIDs[0], stateIDs[0])
+	createRec := ts.doRequest(http.MethodPost, basePath, validBody, token)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+
+	missingGiftPath := basePath + "/999999"
+	updateRec := ts.doRequest(http.MethodPut, missingGiftPath, validBody, token)
+	if updateRec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing gift update, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+	deleteRec := ts.doRequest(http.MethodDelete, missingGiftPath, "", token)
+	if deleteRec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing gift delete, got %d: %s", deleteRec.Code, deleteRec.Body.String())
+	}
+}
+
+func (ts *testServer) loadGiftSeedIDs(t *testing.T, accountID string) ([]uint, []uint) {
+	t.Helper()
+	var occasions []models.GiftOccasion
+	if err := ts.db.Where("account_id = ?", accountID).Order("id ASC").Find(&occasions).Error; err != nil {
+		t.Fatalf("failed to load gift occasions: %v", err)
+	}
+	if len(occasions) < 2 {
+		t.Fatalf("expected at least 2 seeded gift occasions, got %d", len(occasions))
+	}
+	var states []models.GiftState
+	if err := ts.db.Where("account_id = ?", accountID).Order("id ASC").Find(&states).Error; err != nil {
+		t.Fatalf("failed to load gift states: %v", err)
+	}
+	if len(states) < 2 {
+		t.Fatalf("expected at least 2 seeded gift states, got %d", len(states))
+	}
+	occasionIDs := make([]uint, len(occasions))
+	for idx, occasion := range occasions {
+		occasionIDs[idx] = occasion.ID
+	}
+	stateIDs := make([]uint, len(states))
+	for idx, state := range states {
+		stateIDs[idx] = state.ID
+	}
+	return occasionIDs, stateIDs
+}
+
 // ==================== Pets ====================
 
 func TestPetCreate_Success(t *testing.T) {
@@ -2135,6 +2413,41 @@ func TestInvitationAccept_PersistsAcceptLanguageLocaleWithoutSeeders(t *testing.
 
 // ==================== Avatar ====================
 
+func TestAvatar_GetInitialsUsesVaultNameOrder(t *testing.T) {
+	ts := setupTestServer(t)
+	token, auth := ts.registerTestUser(t, "avatar-name-order@example.com")
+	vault := ts.createTestVault(t, token, "Avatar Name Order Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "Alice")
+	override := "%last_name% %first_name%"
+	if err := ts.db.Model(&models.Vault{}).Where("id = ?", vault.ID).Update("name_order", override).Error; err != nil {
+		t.Fatalf("Update vault name_order failed: %v", err)
+	}
+
+	var storedContact models.Contact
+	if err := ts.db.First(&storedContact, "id = ?", contact.ID).Error; err != nil {
+		t.Fatalf("load contact failed: %v", err)
+	}
+	nameOrder, err := services.GetEffectiveVaultNameOrder(ts.db, vault.ID, auth.User.ID)
+	if err != nil {
+		t.Fatalf("GetEffectiveVaultNameOrder failed: %v", err)
+	}
+	legacyAvatar := avatar.GenerateInitials(utils.BuildContactName(&storedContact), 128)
+	vaultAwareAvatar := avatar.GenerateInitials(utils.FormatContactName(nameOrder, &storedContact, ""), 128)
+	if bytes.Equal(legacyAvatar, vaultAwareAvatar) {
+		t.Fatal("test fixture should produce different initials for legacy and vault-aware name order")
+	}
+
+	rec := ts.doRequest(http.MethodGet,
+		"/api/vaults/"+vault.ID+"/contacts/"+contact.ID+"/avatar", "", token)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !bytes.Equal(rec.Body.Bytes(), vaultAwareAvatar) {
+		t.Fatal("generated avatar should use vault-aware contact name order")
+	}
+}
+
 func TestAvatar_GetInitials(t *testing.T) {
 	ts := setupTestServer(t)
 	token, _ := ts.registerTestUser(t, "avatar-initials@example.com")
@@ -2439,6 +2752,95 @@ func TestFileUpload_InvalidType(t *testing.T) {
 	resp := parseResponse(t, rec)
 	if resp.Success {
 		t.Fatal("expected success=false")
+	}
+}
+
+func TestQuickFactFileUploadReplaceAndDelete(t *testing.T) {
+	ts := setupTestServerWithStorage(t)
+	token, _ := ts.registerTestUser(t, "quick-fact-file-handler@example.com")
+	vault := ts.createTestVault(t, token, "Quick Fact File Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "QuickFactFile")
+
+	templateBody := `{"label":"Favorite photo","field_type":"photo","position":1}`
+	templateRec := ts.doRequest(http.MethodPost, "/api/vaults/"+vault.ID+"/settings/quickFactTemplates", templateBody, token)
+	if templateRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", templateRec.Code, templateRec.Body.String())
+	}
+	var templateResp dto.QuickFactTemplateResponse
+	if err := json.Unmarshal(parseResponse(t, templateRec).Data, &templateResp); err != nil {
+		t.Fatalf("failed to decode template response: %v", err)
+	}
+
+	uploadPath := fmt.Sprintf("/api/vaults/%s/contacts/%s/quickFacts/%d/file", vault.ID, contact.ID, templateResp.ID)
+	uploadRec := ts.doMultipartUpload(t, uploadPath, token, "file", "first.png", "image/png", []byte("first image"))
+	if uploadRec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", uploadRec.Code, uploadRec.Body.String())
+	}
+	var created dto.QuickFactResponse
+	if err := json.Unmarshal(parseResponse(t, uploadRec).Data, &created); err != nil {
+		t.Fatalf("failed to decode upload response: %v", err)
+	}
+	if created.FileID == nil || created.File == nil || created.File.Name != "first.png" || created.Content != "first.png" {
+		t.Fatalf("unexpected created quick fact: %+v", created)
+	}
+	firstFileID := *created.FileID
+
+	replacePath := fmt.Sprintf("/api/vaults/%s/contacts/%s/quickFacts/%d/%d/file", vault.ID, contact.ID, templateResp.ID, created.ID)
+	replaceRec := ts.doMultipartUploadWithMethod(t, http.MethodPut, replacePath, token, "file", "second.png", "image/png", []byte("second image"))
+	if replaceRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", replaceRec.Code, replaceRec.Body.String())
+	}
+	var replaced dto.QuickFactResponse
+	if err := json.Unmarshal(parseResponse(t, replaceRec).Data, &replaced); err != nil {
+		t.Fatalf("failed to decode replace response: %v", err)
+	}
+	if replaced.FileID == nil || *replaced.FileID == firstFileID || replaced.File == nil || replaced.File.Name != "second.png" {
+		t.Fatalf("unexpected replaced quick fact: %+v", replaced)
+	}
+	otherTemplateBody := `{"label":"Other photo","field_type":"photo","position":2}`
+	otherTemplateRec := ts.doRequest(http.MethodPost, "/api/vaults/"+vault.ID+"/settings/quickFactTemplates", otherTemplateBody, token)
+	if otherTemplateRec.Code != http.StatusCreated {
+		t.Fatalf("expected other template 201, got %d: %s", otherTemplateRec.Code, otherTemplateRec.Body.String())
+	}
+	var otherTemplate dto.QuickFactTemplateResponse
+	if err := json.Unmarshal(parseResponse(t, otherTemplateRec).Data, &otherTemplate); err != nil {
+		t.Fatalf("failed to decode other template response: %v", err)
+	}
+	mismatchReplacePath := fmt.Sprintf("/api/vaults/%s/contacts/%s/quickFacts/%d/%d/file", vault.ID, contact.ID, otherTemplate.ID, created.ID)
+	mismatchReplaceRec := ts.doMultipartUploadWithMethod(t, http.MethodPut, mismatchReplacePath, token, "file", "wrong.png", "image/png", []byte("wrong image"))
+	if mismatchReplaceRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected mismatched replace 400, got %d: %s", mismatchReplaceRec.Code, mismatchReplaceRec.Body.String())
+	}
+	mismatchDeletePath := fmt.Sprintf("/api/vaults/%s/contacts/%s/quickFacts/%d/%d", vault.ID, contact.ID, otherTemplate.ID, replaced.ID)
+	mismatchDeleteRec := ts.doRequest(http.MethodDelete, mismatchDeletePath, "", token)
+	if mismatchDeleteRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected mismatched delete 400, got %d: %s", mismatchDeleteRec.Code, mismatchDeleteRec.Body.String())
+	}
+
+	deleteOldRec := ts.doRequest(http.MethodDelete, fmt.Sprintf("/api/vaults/%s/files/%d", vault.ID, firstFileID), "", token)
+	if deleteOldRec.Code != http.StatusNotFound {
+		t.Fatalf("expected old file 404, got %d: %s", deleteOldRec.Code, deleteOldRec.Body.String())
+	}
+	deleteReferencedRec := ts.doRequest(http.MethodDelete, fmt.Sprintf("/api/vaults/%s/files/%d", vault.ID, *replaced.FileID), "", token)
+	if deleteReferencedRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected referenced file 400, got %d: %s", deleteReferencedRec.Code, deleteReferencedRec.Body.String())
+	}
+	if resp := parseResponse(t, deleteReferencedRec); resp.Error == nil || resp.Error.Message != "err.file_referenced_by_quick_fact" {
+		t.Fatalf("expected quick fact file reference error, got %+v", resp.Error)
+	}
+	deleteAsContactPhotoRec := ts.doRequest(http.MethodDelete, fmt.Sprintf("/api/vaults/%s/contacts/%s/photos/%d", vault.ID, contact.ID, *replaced.FileID), "", token)
+	if deleteAsContactPhotoRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected contact photo delete protection 400, got %d: %s", deleteAsContactPhotoRec.Code, deleteAsContactPhotoRec.Body.String())
+	}
+
+	deleteFactPath := fmt.Sprintf("/api/vaults/%s/contacts/%s/quickFacts/%d/%d", vault.ID, contact.ID, templateResp.ID, replaced.ID)
+	deleteFactRec := ts.doRequest(http.MethodDelete, deleteFactPath, "", token)
+	if deleteFactRec.Code != http.StatusNoContent {
+		t.Fatalf("expected quick fact delete 204, got %d: %s", deleteFactRec.Code, deleteFactRec.Body.String())
+	}
+	deleteFileAfterFactRec := ts.doRequest(http.MethodDelete, fmt.Sprintf("/api/vaults/%s/files/%d", vault.ID, *replaced.FileID), "", token)
+	if deleteFileAfterFactRec.Code != http.StatusNotFound {
+		t.Fatalf("expected deleted file 404, got %d: %s", deleteFileAfterFactRec.Code, deleteFileAfterFactRec.Body.String())
 	}
 }
 

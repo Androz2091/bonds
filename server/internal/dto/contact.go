@@ -3,7 +3,7 @@ package dto
 import "time"
 
 type CreateContactRequest struct {
-	FirstName                string     `json:"first_name" validate:"required,min=1,max=255" example:"John"`
+	FirstName                string     `json:"first_name" validate:"max=255" example:"John"`
 	LastName                 string     `json:"last_name" validate:"max=255" example:"Doe"`
 	MiddleName               string     `json:"middle_name" validate:"max=255" example:"Michael"`
 	Nickname                 string     `json:"nickname" validate:"max=255" example:"Johnny"`
@@ -24,7 +24,7 @@ type CreateContactRequest struct {
 }
 
 type UpdateContactRequest struct {
-	FirstName                string     `json:"first_name" validate:"required,min=1,max=255" example:"John"`
+	FirstName                string     `json:"first_name" validate:"max=255" example:"John"`
 	LastName                 string     `json:"last_name" validate:"max=255" example:"Doe"`
 	MiddleName               string     `json:"middle_name" validate:"max=255" example:"Michael"`
 	Nickname                 string     `json:"nickname" validate:"max=255" example:"Johnny"`
@@ -129,6 +129,7 @@ type ContactSearchItem struct {
 
 type CatchUpPromptResponse struct {
 	ContactID                string    `json:"contact_id" example:"550e8400-e29b-41d4-a716-446655440000"`
+	Name                     string    `json:"name" example:"John Doe"`
 	FirstName                string    `json:"first_name" example:"John"`
 	LastName                 string    `json:"last_name" example:"Doe"`
 	LastTalkedTo             time.Time `json:"last_talked_to" example:"2026-01-15T10:30:00Z"`

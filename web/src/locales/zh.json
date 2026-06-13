@@ -574,7 +574,8 @@
     },
     "form": {
       "select_gender": "选择性别",
-      "select_pronoun": "选择代词"
+      "select_pronoun": "选择代词",
+      "name_or_nickname_required": "必须填写名字或昵称"
     },
     "detail": {
       "back": "返回联系人列表",
@@ -846,6 +847,27 @@
       "amount": "金额",
       "currency": "货币"
     },
+    "gifts": {
+      "title": "礼物",
+      "add": "添加",
+      "name": "名称",
+      "name_placeholder": "礼物名称",
+      "occasion": "场合",
+      "occasion_placeholder": "选择场合",
+      "state": "状态",
+      "state_placeholder": "选择状态",
+      "type": "类型",
+      "type_given": "送出",
+      "type_received": "收到",
+      "description_placeholder": "添加详情（可选）…",
+      "no_gifts": "暂无礼物",
+      "delete": "删除礼物",
+      "delete_confirm": "确定删除此礼物？",
+      "edit": "编辑礼物",
+      "added": "礼物已添加",
+      "updated": "礼物已更新",
+      "deleted": "礼物已删除"
+    },
     "quick_facts": {
       "title": "速览",
       "add": "添加",
@@ -857,7 +879,21 @@
       "toggled": "可见性已更新",
       "select_category_required": "请选择速览分类",
       "missing_fact_reference": "此速览缺少分类",
-      "untitled_category": "未命名分类"
+      "untitled_category": "未命名分类",
+      "text_placeholder": "添加速览内容",
+      "number_placeholder": "输入数字",
+      "date_placeholder": "选择日期",
+      "select_placeholder": "选择选项",
+      "upload_photo": "上传照片",
+      "upload_document": "上传文档",
+      "replace_file": "替换文件",
+      "download_file": "下载文件",
+      "file_uploaded": "文件已上传",
+      "file_upload_failed": "文件上传失败",
+      "value_required": "请输入内容",
+      "unsupported_field_type": "不支持的速览类型",
+      "file_missing": "文件不可用",
+      "empty_value": "空"
     },
     "relationships": {
       "title": "关系",
@@ -1282,6 +1318,29 @@
     "life_event_type_updated": "人生事件类型已更新",
     "move_up": "上移",
     "move_down": "下移",
+    "quick_fact_templates": {
+      "add_title": "添加速览模板",
+      "edit_title": "编辑速览模板",
+      "list_title": "已配置模板",
+      "label": "标签",
+      "label_placeholder": "例如：最喜欢的餐厅",
+      "field_type": "字段类型",
+      "required": "必填",
+      "help_text": "帮助说明",
+      "help_text_placeholder": "说明应记录什么内容",
+      "default_value": "默认值",
+      "default_value_placeholder": "可选默认值",
+      "select_options": "选项",
+      "select_options_placeholder": "每行一个选项",
+      "option_per_line": "每行输入一个选项。",
+      "select_options_required": "请至少添加一个选项",
+      "type_text": "文本",
+      "type_number": "数字",
+      "type_date": "日期",
+      "type_select": "选择",
+      "type_photo": "照片",
+      "type_document": "文档"
+    },
     "csv_import": {
       "tab_label": "CSV导入",
       "title": "从CSV导入联系人",
@@ -1345,7 +1404,15 @@
       "photos": "照片",
       "skipped": "跳过",
       "errors": "错误"
-    }
+    },
+    "name_order_override_title": "姓名显示顺序",
+    "name_order_override_description": "默认情况下，此保管库使用你的全局姓名显示偏好。你也可以为此保管库设置专用顺序，让联系人姓名在此保管库内保持一致。",
+    "name_order_global": "使用全局偏好",
+    "name_order_global_help": "当前全局模板：{{template}}",
+    "name_order_override": "使用此保管库专用顺序",
+    "name_order_condition_help": "可选片段可以使用条件语法，例如 {nickname? (%nickname%)}。",
+    "name_order_save": "保存覆盖设置",
+    "name_order_clear": "使用全局偏好"
   },
   "backups": {
     "title": "备份管理",

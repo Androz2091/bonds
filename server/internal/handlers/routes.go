@@ -43,6 +43,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	contactInformationService := services.NewContactInformationService(db)
 	loanService := services.NewLoanService(db)
 	petService := services.NewPetService(db)
+	giftService := services.NewGiftService(db)
 	relationshipService := services.NewRelationshipService(db)
 	goalService := services.NewGoalService(db)
 	lifeEventService := services.NewLifeEventService(db)
@@ -90,6 +91,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	vaultMoodParamService := services.NewVaultMoodParamService(db)
 	vaultLifeEventSettingsService := services.NewVaultLifeEventService(db)
 	vaultQuickFactTplService := services.NewVaultQuickFactTemplateService(db)
+	vaultQuickFactTplService.SetUploadDir(cfg.Storage.UploadDir)
 	userManagementService := services.NewUserManagementService(db)
 	accountCancelService := services.NewAccountCancelService(db)
 	storageInfoService := services.NewStorageInfoService(db, systemSettingService)
@@ -150,7 +152,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	} else {
 		searchEngine = &search.NoopEngine{}
 	}
-	searchService := services.NewSearchService(searchEngine)
+	searchService := services.NewSearchServiceWithDB(db, searchEngine)
 
 	// Wire FeedRecorder into services
 	contactService.SetFeedRecorder(feedRecorder)
@@ -163,6 +165,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	loanService.SetFeedRecorder(feedRecorder)
 	relationshipService.SetFeedRecorder(feedRecorder)
 	vaultFileService.SetFeedRecorder(feedRecorder)
+	quickFactService.SetFileService(vaultFileService)
 
 	contactService.SetSearchService(searchService)
 	contactService.SetDavPushService(davPushService)
@@ -190,12 +193,13 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	contactInformationHandler := NewContactInformationHandler(contactInformationService)
 	loanHandler := NewLoanHandler(loanService)
 	petHandler := NewPetHandler(petService)
+	giftHandler := NewGiftHandler(giftService)
 	relationshipHandler := NewRelationshipHandler(relationshipService)
 	goalHandler := NewGoalHandler(goalService)
 	lifeEventHandler := NewLifeEventHandler(lifeEventService)
 	moodTrackingHandler := NewMoodTrackingHandler(moodTrackingService)
 	groupHandler := NewGroupHandler(groupService)
-	quickFactHandler := NewQuickFactHandler(quickFactService)
+	quickFactHandler := NewQuickFactHandler(quickFactService, storageInfoService, systemSettingService)
 	journalHandler := NewJournalHandler(journalService)
 	postHandler := NewPostHandler(postService)
 	vaultTaskHandler := NewVaultTaskHandler(vaultTaskService)
@@ -443,6 +447,12 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	petRoutes.PUT("/:id", petHandler.Update, requireEditor)
 	petRoutes.DELETE("/:id", petHandler.Delete, requireEditor)
 
+	giftRoutes := contactSub.Group("/gifts")
+	giftRoutes.GET("", giftHandler.List)
+	giftRoutes.POST("", giftHandler.Create, requireEditor)
+	giftRoutes.PUT("/:id", giftHandler.Update, requireEditor)
+	giftRoutes.DELETE("/:id", giftHandler.Delete, requireEditor)
+
 	relationshipRoutes := contactSub.Group("/relationships")
 	relationshipRoutes.GET("", relationshipHandler.List)
 	relationshipRoutes.GET("/graph", relationshipHandler.GetContactGraph)
@@ -488,7 +498,9 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	quickFactRoutes.GET("", quickFactHandler.ListAll)
 	quickFactRoutes.GET("/:templateId", quickFactHandler.List)
 	quickFactRoutes.POST("/:templateId", quickFactHandler.Create, requireEditor)
+	quickFactRoutes.POST("/:templateId/file", quickFactHandler.UploadFile, requireEditor)
 	quickFactRoutes.PUT("/:templateId/:id", quickFactHandler.Update, requireEditor)
+	quickFactRoutes.PUT("/:templateId/:id/file", quickFactHandler.ReplaceFile, requireEditor)
 	quickFactRoutes.DELETE("/:templateId/:id", quickFactHandler.Delete, requireEditor)
 
 	vaultScoped := protected.Group("/vaults/:vault_id", VaultPermissionMiddleware(vaultService, models.PermissionViewer))
@@ -738,6 +750,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	vaultSettings := vaultScoped.Group("/settings", VaultPermissionMiddleware(vaultService, models.PermissionManager))
 	vaultSettings.GET("", vaultSettingsHandler.Get)
 	vaultSettings.PUT("", vaultSettingsHandler.Update)
+	vaultSettings.PUT("/name-order", vaultSettingsHandler.UpdateNameOrder)
 	vaultSettings.PUT("/template", vaultSettingsHandler.UpdateTemplate)
 	vaultSettings.PUT("/visibility", vaultSettingsHandler.UpdateVisibility)
 

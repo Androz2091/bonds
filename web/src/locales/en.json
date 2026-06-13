@@ -574,7 +574,8 @@
     },
     "form": {
       "select_gender": "Select gender",
-      "select_pronoun": "Select pronoun"
+      "select_pronoun": "Select pronoun",
+      "name_or_nickname_required": "First name or nickname is required"
     },
     "detail": {
       "back": "Back to contacts",
@@ -846,6 +847,27 @@
       "amount": "Amount",
       "currency": "Currency"
     },
+    "gifts": {
+      "title": "Gifts",
+      "add": "Add",
+      "name": "Name",
+      "name_placeholder": "Gift name",
+      "occasion": "Occasion",
+      "occasion_placeholder": "Select an occasion",
+      "state": "State",
+      "state_placeholder": "Select a state",
+      "type": "Type",
+      "type_given": "Given",
+      "type_received": "Received",
+      "description_placeholder": "Add details (optional)…",
+      "no_gifts": "No gifts",
+      "delete": "Delete gift",
+      "delete_confirm": "Delete this gift?",
+      "edit": "Edit gift",
+      "added": "Gift added",
+      "updated": "Gift updated",
+      "deleted": "Gift deleted"
+    },
     "quick_facts": {
       "title": "Quick Facts",
       "add": "Add",
@@ -857,7 +879,21 @@
       "toggled": "Visibility updated",
       "select_category_required": "Please select a quick fact category",
       "missing_fact_reference": "Quick fact is missing its category",
-      "untitled_category": "Untitled category"
+      "untitled_category": "Untitled category",
+      "text_placeholder": "Add a quick fact",
+      "number_placeholder": "Enter a number",
+      "date_placeholder": "Select a date",
+      "select_placeholder": "Select an option",
+      "upload_photo": "Upload photo",
+      "upload_document": "Upload document",
+      "replace_file": "Replace file",
+      "download_file": "Download file",
+      "file_uploaded": "File uploaded",
+      "file_upload_failed": "File upload failed",
+      "value_required": "Value is required",
+      "unsupported_field_type": "Unsupported quick fact type",
+      "file_missing": "File unavailable",
+      "empty_value": "Empty"
     },
     "relationships": {
       "title": "Relationships",
@@ -1282,6 +1318,29 @@
     "life_event_type_updated": "Life event type updated",
     "move_up": "Move Up",
     "move_down": "Move Down",
+    "quick_fact_templates": {
+      "add_title": "Add quick fact template",
+      "edit_title": "Edit quick fact template",
+      "list_title": "Configured templates",
+      "label": "Label",
+      "label_placeholder": "e.g. Favorite restaurant",
+      "field_type": "Field type",
+      "required": "Required",
+      "help_text": "Help text",
+      "help_text_placeholder": "Explain what should be recorded",
+      "default_value": "Default value",
+      "default_value_placeholder": "Optional default value",
+      "select_options": "Select options",
+      "select_options_placeholder": "One option per line",
+      "option_per_line": "Enter one option per line.",
+      "select_options_required": "Add at least one option",
+      "type_text": "Text",
+      "type_number": "Number",
+      "type_date": "Date",
+      "type_select": "Select",
+      "type_photo": "Photo",
+      "type_document": "Document"
+    },
     "csv_import": {
       "tab_label": "CSV Import",
       "title": "Import contacts from CSV",
@@ -1345,7 +1404,15 @@
       "photos": "Photos",
       "skipped": "Skipped",
       "errors": "Errors"
-    }
+    },
+    "name_order_override_title": "Name display order",
+    "name_order_override_description": "By default, this vault uses your global name display preference. You can set a specific order for this vault to keep contact names consistent inside this vault.",
+    "name_order_global": "Use global preference",
+    "name_order_global_help": "Current global template: {{template}}",
+    "name_order_override": "Use a vault-specific order",
+    "name_order_condition_help": "Optional segments can use conditional syntax, for example {nickname? (%nickname%)}.",
+    "name_order_save": "Save override",
+    "name_order_clear": "Use global preference"
   },
   "backups": {
     "title": "Backups",
