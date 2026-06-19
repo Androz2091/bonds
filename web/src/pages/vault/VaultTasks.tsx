@@ -15,6 +15,7 @@ import {
 import { Virtuoso } from "react-virtuoso";
 import {
   ArrowLeftOutlined,
+  BranchesOutlined,
   CheckSquareOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -31,6 +32,8 @@ const { Title } = Typography;
 type ViewMode = "list" | "kanban";
 
 const VIEW_STORAGE_KEY = "bonds_vault_tasks_view";
+
+const isSubTask = (task: VaultTask) => task.parent_task_id != null;
 
 function loadView(): ViewMode {
   try {
@@ -101,7 +104,13 @@ export default function VaultTasks() {
     if (contacts.length === 0) return null;
     return (
       <div
-        style={{ marginLeft: 24, marginTop: 4, display: "flex", flexWrap: "wrap", gap: 8 }}
+        style={{
+          marginLeft: isSubTask(task) ? 40 : 24,
+          marginTop: 4,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 8,
+        }}
         onClick={stop}
       >
         {contacts.map((c) => (
@@ -183,20 +192,30 @@ export default function VaultTasks() {
             <Virtuoso
               useWindowScroll
               data={pending}
-              itemContent={(_, task) => (
-                <List.Item
-                  onClick={() => setEditTask(task)}
-                  style={{
-                    borderLeft: `3px solid ${token.colorSuccess}`,
-                    marginBottom: 4,
-                    paddingLeft: 12,
-                    borderRadius: `0 ${token.borderRadius}px ${token.borderRadius}px 0`,
-                    background: token.colorFillQuaternary,
-                    display: "block",
-                    cursor: "pointer",
-                  }}
-                >
+              itemContent={(_, task) => {
+                const subTask = isSubTask(task);
+                return (
+                  <List.Item
+                    onClick={() => setEditTask(task)}
+                    data-task-kind={subTask ? "sub-task" : "task"}
+                    style={{
+                      borderLeft: `3px solid ${subTask ? token.colorPrimaryBorder : token.colorSuccess}`,
+                      marginBottom: 4,
+                      marginLeft: subTask ? 18 : 0,
+                      paddingLeft: subTask ? 10 : 12,
+                      borderRadius: `0 ${token.borderRadius}px ${token.borderRadius}px 0`,
+                      background: subTask ? token.colorFillAlter : token.colorFillQuaternary,
+                      display: "block",
+                      cursor: "pointer",
+                    }}
+                  >
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {subTask && (
+                      <BranchesOutlined
+                        aria-hidden
+                        style={{ color: token.colorTextTertiary, fontSize: 14 }}
+                      />
+                    )}
                     {/* Stop click on the checkbox itself from opening the modal —
                         checkbox-toggle UX should be separate from edit. */}
                     <span onClick={stop}>
@@ -212,7 +231,7 @@ export default function VaultTasks() {
                   {task.description && (
                     <div
                       style={{
-                        marginLeft: 24,
+                        marginLeft: subTask ? 40 : 24,
                         marginTop: 4,
                         fontSize: 13,
                         color: token.colorTextSecondary,
@@ -223,8 +242,9 @@ export default function VaultTasks() {
                       {task.description}
                     </div>
                   )}
-                </List.Item>
-              )}
+                  </List.Item>
+                );
+              }}
             />
           )}
 
@@ -244,20 +264,31 @@ export default function VaultTasks() {
               <Virtuoso
                 useWindowScroll
                 data={completed}
-                itemContent={(_, task) => (
-                  <List.Item
-                    onClick={() => setEditTask(task)}
-                    style={{
-                      borderLeft: `3px solid ${token.colorBorder}`,
-                      marginBottom: 4,
-                      paddingLeft: 12,
-                      borderRadius: `0 ${token.borderRadius}px ${token.borderRadius}px 0`,
-                      opacity: 0.6,
-                      display: "block",
-                      cursor: "pointer",
-                    }}
-                  >
+                itemContent={(_, task) => {
+                  const subTask = isSubTask(task);
+                  return (
+                    <List.Item
+                      onClick={() => setEditTask(task)}
+                      data-task-kind={subTask ? "sub-task" : "task"}
+                      style={{
+                        borderLeft: `3px solid ${subTask ? token.colorPrimaryBorder : token.colorBorder}`,
+                        marginBottom: 4,
+                        marginLeft: subTask ? 18 : 0,
+                        paddingLeft: subTask ? 10 : 12,
+                        borderRadius: `0 ${token.borderRadius}px ${token.borderRadius}px 0`,
+                        background: subTask ? token.colorFillAlter : undefined,
+                        opacity: 0.6,
+                        display: "block",
+                        cursor: "pointer",
+                      }}
+                    >
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {subTask && (
+                        <BranchesOutlined
+                          aria-hidden
+                          style={{ color: token.colorTextTertiary, fontSize: 14 }}
+                        />
+                      )}
                       <span onClick={stop}>
                         <Checkbox checked style={{ textDecoration: "line-through" }}>
                           {task.label}
@@ -265,8 +296,9 @@ export default function VaultTasks() {
                       </span>
                     </div>
                     {renderContactLink(task)}
-                  </List.Item>
-                )}
+                    </List.Item>
+                  );
+                }}
               />
             </>
           )}

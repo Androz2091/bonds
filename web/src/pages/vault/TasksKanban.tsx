@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Card, Tag, Typography, Button, Grid, Spin, theme } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { BranchesOutlined, PlusOutlined } from "@ant-design/icons";
 import {
   DndContext,
   closestCorners,
@@ -28,6 +28,7 @@ const { Text } = Typography;
 const { useBreakpoint } = Grid;
 
 const TASK_QUERY_KEY = (vaultId: string) => ["vaults", vaultId, "all-tasks"];
+const isSubTask = (task: VaultTask) => task.parent_task_id != null;
 
 interface TasksKanbanProps {
   vaultId: string;
@@ -355,13 +356,46 @@ interface TaskCardCommonProps {
 function TaskCardBody({ task, token, dateFormats, dueLabel }: Omit<TaskCardCommonProps, "onClick">) {
   const contacts = task.contacts ?? [];
   const hasMeta = contacts.length > 0 || task.due_at;
+  const subTask = isSubTask(task);
   return (
-    <Card size="small" styles={{ body: { padding: 12 } }} style={{ borderRadius: token.borderRadius }}>
-      <div style={{ fontWeight: 500, marginBottom: hasMeta ? 6 : 0 }}>
+    <Card
+      data-task-kind={subTask ? "sub-task" : "task"}
+      size="small"
+      styles={{ body: { padding: subTask ? "10px 12px" : 12 } }}
+      style={{
+        borderRadius: token.borderRadius,
+        borderColor: subTask ? token.colorPrimaryBorder : undefined,
+        background: subTask ? token.colorFillAlter : undefined,
+        marginLeft: subTask ? 12 : 0,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          fontWeight: subTask ? 400 : 500,
+          marginBottom: hasMeta ? 6 : 0,
+        }}
+      >
+        {subTask && (
+          <BranchesOutlined
+            aria-hidden
+            style={{ color: token.colorTextTertiary, fontSize: 14 }}
+          />
+        )}
         {task.label}
       </div>
       {hasMeta && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 6,
+            alignItems: "center",
+            paddingLeft: subTask ? 20 : 0,
+          }}
+        >
           {contacts.map((c) => (
             <Tag key={c.id} color="blue" style={{ marginRight: 0 }}>
               {c.name || c.id}
