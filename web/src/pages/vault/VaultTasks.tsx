@@ -218,11 +218,15 @@ export default function VaultTasks() {
                     )}
                     {/* Stop click on the checkbox itself from opening the modal —
                         checkbox-toggle UX should be separate from edit. */}
-                    <span onClick={stop}>
-                      <Checkbox checked={false}>{task.label}</Checkbox>
+                    <span onClick={stop} style={{ minWidth: 0, flex: 1 }}>
+                      <Checkbox checked={false} style={{ display: "flex", alignItems: "flex-start" }}>
+                        <span style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}>
+                          {task.label}
+                        </span>
+                      </Checkbox>
                     </span>
                     {task.due_at && (
-                      <Tag color="orange" style={{ marginLeft: "auto", borderRadius: 12 }}>
+                      <Tag color="orange" style={{ marginLeft: "auto", borderRadius: 12, flexShrink: 0 }}>
                         {t("vault.tasks.due", { date: formatShortDate(task.due_at, dateFormats) })}
                       </Tag>
                     )}
@@ -289,9 +293,17 @@ export default function VaultTasks() {
                           style={{ color: token.colorTextTertiary, fontSize: 14 }}
                         />
                       )}
-                      <span onClick={stop}>
-                        <Checkbox checked style={{ textDecoration: "line-through" }}>
-                          {task.label}
+                      <span onClick={stop} style={{ minWidth: 0, flex: 1 }}>
+                        <Checkbox checked style={{ display: "flex", alignItems: "flex-start" }}>
+                          <span
+                            style={{
+                              textDecoration: "line-through",
+                              overflowWrap: "anywhere",
+                              wordBreak: "break-word",
+                            }}
+                          >
+                            {task.label}
+                          </span>
                         </Checkbox>
                       </span>
                     </div>

@@ -376,6 +376,8 @@ function TaskCardBody({ task, token, dateFormats, dueLabel }: Omit<TaskCardCommo
           gap: 6,
           fontWeight: subTask ? 400 : 500,
           marginBottom: hasMeta ? 6 : 0,
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
         }}
       >
         {subTask && (
