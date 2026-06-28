@@ -26,7 +26,7 @@ Monica is a beloved open-source personal CRM with 24k+ stars. But as a side proj
 
 ## Features
 
-- **Contacts**: Full lifecycle management with notes, tasks, reminders, gifts, debts, activities, life events, pets, and more. Includes a needs-verification flag to keep your data fresh.
+- **Contacts**: Full lifecycle management with notes, tasks, reminders, gifts, money and item loans, activities, life events, pets, and more. Includes a needs-verification flag to keep your data fresh.
 - **Vault Dashboard**: Responsive 3-column layout with activity feed, life events, life metrics tracking (+1 counter), mood recording, upcoming reminders, and due tasks.
 - **Vaults**: Multi-vault data isolation with role-based access (Manager, Editor, Viewer).
 - **Reminders**: One-time and recurring (weekly, monthly, yearly), with email and Shoutrrr-compatible notifications.
@@ -135,7 +135,7 @@ The following are managed from the **Admin > System Settings** page after login:
 - **Application**: Name, URL, Announcement banner.
 - **Authentication**: Password auth toggle, User registration toggle.
 - **JWT**: Token expiry, Refresh window.
-- **SMTP**: Host, Port, Username, Password, Sender email.
+- **SMTP**: Host, Port, optional Username/Password, Sender email. Leave both Username and Password empty for unauthenticated relays.
 - **OAuth / OIDC**: GitHub, Google, and OIDC/SSO credentials.
 - **WebAuthn**: Relying Party ID, Display Name, Origins.
 - **Telegram**: Bot token for notifications.

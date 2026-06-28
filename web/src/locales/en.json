@@ -524,7 +524,14 @@
       "filter_archived": "Archived",
       "filter_all": "All",
       "filter_favorites": "Favorites",
-      "filter_needs_verification": "Needs verification"
+      "filter_needs_verification": "Needs verification",
+      "bulk_move_selected": "Move {{count}} selected",
+      "bulk_move_title": "Move selected contacts",
+      "bulk_move_count": "{{count}} selected contacts will be moved.",
+      "bulk_move_select_vault": "Target vault",
+      "bulk_move_no_targets": "No other vaults available",
+      "bulk_move": "Move contacts",
+      "bulk_move_success": "Moved {{count}} contacts"
     },
     "needs_verification": {
       "badge": "To verify",
@@ -840,12 +847,24 @@
       "settled": "Settled",
       "settled_at": "Settled {{date}}",
       "modal_title": "Add Loan",
+      "category": "Category",
+      "category_money": "Money",
+      "category_item": "Item",
       "name": "Name",
       "direction": "Direction",
-      "i_lent": "I lent money",
-      "i_borrowed": "I borrowed money",
+      "i_lent": "I lent",
+      "i_borrowed": "I borrowed",
       "amount": "Amount",
-      "currency": "Currency"
+      "currency": "Currency",
+      "currency_placeholder": "Select currency",
+      "item_name": "Item name",
+      "quantity": "Quantity",
+      "quantity_value": "Qty: {{count}}",
+      "due_date": "Due date",
+      "due_at": "Due {{date}}",
+      "mark_returned": "Mark returned",
+      "returned": "Returned",
+      "returned_at": "Returned {{date}}"
     },
     "gifts": {
       "title": "Gifts",
@@ -923,6 +942,9 @@
       "new_timeline": "New Timeline",
       "no_timelines": "No life event timelines",
       "no_events": "No life events in this timeline",
+      "participants": "Additional participants",
+      "participants_placeholder": "Select participants...",
+      "self_participant": "You",
       "event": "Event",
       "delete_timeline_confirm": "Delete timeline?",
       "delete_event_confirm": "Delete?",
@@ -1565,6 +1587,7 @@
         "port": "SMTP Port",
         "username": "SMTP Username",
         "password": "SMTP Password",
+        "password_hint": "*** preserves existing password. Type a new value to replace it.",
         "from": "Sender Email"
       },
       "webauthn": {

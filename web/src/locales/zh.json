@@ -524,7 +524,14 @@
       "filter_archived": "已归档",
       "filter_all": "全部",
       "filter_favorites": "收藏",
-      "filter_needs_verification": "待核实"
+      "filter_needs_verification": "待核实",
+      "bulk_move_selected": "移动选中的 {{count}} 位",
+      "bulk_move_title": "移动选中的联系人",
+      "bulk_move_count": "将移动 {{count}} 位选中的联系人。",
+      "bulk_move_select_vault": "目标 Vault",
+      "bulk_move_no_targets": "没有其他可用 Vault",
+      "bulk_move": "移动联系人",
+      "bulk_move_success": "已移动 {{count}} 位联系人"
     },
     "needs_verification": {
       "badge": "待核实",
@@ -840,12 +847,24 @@
       "settled": "已结清",
       "settled_at": "结清于 {{date}}",
       "modal_title": "添加借贷",
+      "category": "类别",
+      "category_money": "金钱",
+      "category_item": "物品",
       "name": "名称",
       "direction": "方向",
       "i_lent": "我借出",
       "i_borrowed": "我借入",
       "amount": "金额",
-      "currency": "货币"
+      "currency": "货币",
+      "currency_placeholder": "选择货币",
+      "item_name": "物品名称",
+      "quantity": "数量",
+      "quantity_value": "数量：{{count}}",
+      "due_date": "到期日期",
+      "due_at": "到期 {{date}}",
+      "mark_returned": "标记已归还",
+      "returned": "已归还",
+      "returned_at": "归还于 {{date}}"
     },
     "gifts": {
       "title": "礼物",
@@ -923,6 +942,9 @@
       "new_timeline": "新建时间线",
       "no_timelines": "暂无人生事件时间线",
       "no_events": "此时间线暂无事件",
+      "participants": "其他参与者",
+      "participants_placeholder": "选择参与者...",
+      "self_participant": "我",
       "event": "事件",
       "delete_timeline_confirm": "确定删除此时间线？",
       "delete_event_confirm": "确定删除？",
@@ -1565,6 +1587,7 @@
         "port": "SMTP 端口",
         "username": "SMTP 用户名",
         "password": "SMTP 密码",
+        "password_hint": "*** 表示保留现有密码。输入新值以替换它。",
         "from": "发件人邮箱"
       },
       "webauthn": {

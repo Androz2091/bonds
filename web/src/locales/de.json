@@ -524,7 +524,14 @@
       "filter_archived": "Archiviert",
       "filter_all": "Alle",
       "filter_favorites": "Favoriten",
-      "filter_needs_verification": "Zur Überprüfung"
+      "filter_needs_verification": "Zur Überprüfung",
+      "bulk_move_selected": "{{count}} ausgewählte verschieben",
+      "bulk_move_title": "Ausgewählte Kontakte verschieben",
+      "bulk_move_count": "{{count}} ausgewählte Kontakte werden verschoben.",
+      "bulk_move_select_vault": "Ziel-Vault",
+      "bulk_move_no_targets": "Keine anderen Vaults verfügbar",
+      "bulk_move": "Kontakte verschieben",
+      "bulk_move_success": "{{count}} Kontakte verschoben"
     },
     "needs_verification": {
       "badge": "Zu überprüfen",
@@ -840,12 +847,24 @@
       "settled": "Beglichen",
       "settled_at": "Beglichen {{date}}",
       "modal_title": "Darlehen hinzufügen",
+      "category": "Kategorie",
+      "category_money": "Geld",
+      "category_item": "Gegenstand",
       "name": "Name",
       "direction": "Richtung",
-      "i_lent": "Ich habe Geld geliehen",
-      "i_borrowed": "Ich habe Geld geborgt",
+      "i_lent": "Ich habe verliehen",
+      "i_borrowed": "Ich habe geliehen",
       "amount": "Betrag",
-      "currency": "Währung"
+      "currency": "Währung",
+      "currency_placeholder": "Währung auswählen",
+      "item_name": "Gegenstandsname",
+      "quantity": "Anzahl",
+      "quantity_value": "Anzahl: {{count}}",
+      "due_date": "Fälligkeitsdatum",
+      "due_at": "Fällig {{date}}",
+      "mark_returned": "Als zurückgegeben markieren",
+      "returned": "Zurückgegeben",
+      "returned_at": "Zurückgegeben {{date}}"
     },
     "gifts": {
       "title": "Geschenke",
@@ -923,6 +942,9 @@
       "new_timeline": "Neue Zeitleiste",
       "no_timelines": "Keine Lebensereignis-Zeitleisten",
       "no_events": "Keine Lebensereignisse in dieser Zeitleiste",
+      "participants": "Weitere Teilnehmer",
+      "participants_placeholder": "Teilnehmer auswählen...",
+      "self_participant": "Sie",
       "event": "Ereignis",
       "delete_timeline_confirm": "Zeitleiste löschen?",
       "delete_event_confirm": "Löschen?",
@@ -1565,6 +1587,7 @@
         "port": "SMTP-Port",
         "username": "SMTP-Benutzername",
         "password": "SMTP-Passwort",
+        "password_hint": "*** behält das bestehende Passwort. Geben Sie einen neuen Wert ein, um es zu ersetzen.",
         "from": "Absender-E-Mail"
       },
       "webauthn": {

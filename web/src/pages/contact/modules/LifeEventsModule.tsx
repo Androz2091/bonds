@@ -15,6 +15,7 @@ import {
   Space,
   Tag,
   theme,
+  Select,
 } from "antd";
 import {
   PlusOutlined,
@@ -27,9 +28,11 @@ import {
 } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api";
-import type { TimelineEvent as TEvent, PaginationMeta, APIError, LifeEventCategoryResponse, UserPreferences } from "@/api";
+import type { TimelineEvent as TEvent, PaginationMeta, APIError, LifeEventCategoryResponse, UserPreferences, Contact } from "@/api";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { useDateFormat, formatDate, formatMonthYear } from "@/utils/dateFormat";
+import { formatContactName, useVaultNameOrder } from "@/utils/nameFormat";
 import dayjs from "dayjs";
 import CalendarAwareDatePicker from "@/components/CalendarAwareDatePicker";
 import { buildCalendarAwareValue } from "@/components/calendarAwareDateValue";
@@ -48,6 +51,7 @@ export default function LifeEventsModule({
   const [leOpen, setLeOpen] = useState(false);
   const [selectedTimeline, setSelectedTimeline] = useState<number | null>(null);
   const [editingLeId, setEditingLeId] = useState<number | null>(null);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const [allTimelines, setAllTimelines] = useState<TEvent[]>([]);
   const [hasMore, setHasMore] = useState(true);
@@ -58,10 +62,72 @@ export default function LifeEventsModule({
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const dateFormats = useDateFormat();
+  const nameOrder = useVaultNameOrder(String(vaultId));
   const qk = ["vaults", vaultId, "contacts", contactId, "timelineEvents"];
 
+  const [contactSearch, setContactSearch] = useState("");
+
+  const { data: contactsData = [] } = useQuery({
+    queryKey: ["vaults", vaultId, "contacts", "for-le-modal", contactSearch],
+    queryFn: async () => {
+      const params: Parameters<typeof api.contacts.contactsList>[1] = { per_page: 200 };
+      if (contactSearch.length > 2) {
+        params.search = contactSearch;
+      }
+      const res = await api.contacts.contactsList(String(vaultId), params);
+      return (res.data ?? []) as Contact[];
+    },
+  });
+
+  const getForcedParticipantIds = useCallback((timelineId?: number) => {
+    const forced = new Set<string>();
+    forced.add(String(contactId));
+    if (timelineId !== undefined) {
+      const tl = allTimelines.find(t => t.id === timelineId);
+      if (tl?.participants) {
+        tl.participants.forEach(p => {
+          if (p.id) forced.add(String(p.id));
+        });
+      }
+    }
+    return forced;
+  }, [contactId, allTimelines]);
+
+  const contactOptions = (() => {
+    const forcedIds = getForcedParticipantIds(selectedTimeline ?? undefined);
+
+    const optionsMap = new Map<string, { value: string; label: string }>();
+
+    contactsData.forEach((c) => {
+      if (c.id && !forcedIds.has(String(c.id))) {
+        optionsMap.set(String(c.id), {
+          value: String(c.id),
+          label: formatContactName(nameOrder, c),
+        });
+      }
+    });
+
+    if (editingLeId && selectedTimeline) {
+      const tl = allTimelines.find(t => t.id === selectedTimeline);
+      const le = tl?.life_events?.find(e => e.id === editingLeId);
+      if (le?.participants) {
+        le.participants.forEach(p => {
+          const participantId = p.id ? String(p.id) : "";
+          if (participantId && !forcedIds.has(participantId) && !optionsMap.has(participantId)) {
+            optionsMap.set(participantId, {
+              value: participantId,
+              label: p.name || participantId,
+            });
+          }
+        });
+      }
+    }
+
+    return Array.from(optionsMap.values());
+  })();
+
   // Fetch life event categories to get a valid type ID (instead of hardcoded 1)
-  const { data: lifeEventCategories } = useQuery({
+  const { data: lifeEventCategories = [] } = useQuery({
     queryKey: ["vault", vaultId, "lifeEventCategories"],
     queryFn: async () => {
       const res = await api.vaultSettings.settingsLifeEventCategoriesList(String(vaultId));
@@ -69,10 +135,7 @@ export default function LifeEventsModule({
     },
   });
 
-  // Use the first available life event type ID from seed data
-  const defaultLifeEventTypeId = lifeEventCategories
-    ?.flatMap((cat) => cat.types ?? [])
-    ?.find((t) => t.id)?.id ?? 0;
+  const filteredTypes = lifeEventCategories.find((c) => c.id === selectedCategoryId)?.types ?? [];
 
   const resetPagination = useCallback(() => {
     setPage(1);
@@ -92,10 +155,11 @@ export default function LifeEventsModule({
   });
 
   const createTimelineMutation = useMutation({
-    mutationFn: (values: { label: string; started_at: dayjs.Dayjs }) =>
+    mutationFn: (values: { label: string; started_at: dayjs.Dayjs; participants?: string[] }) =>
       api.lifeEvents.contactsTimelineEventsCreate(String(vaultId), String(contactId), {
         label: values.label,
         started_at: values.started_at.toISOString(),
+        participants: values.participants,
       }),
     onSuccess: () => {
       resetPagination();
@@ -127,17 +191,18 @@ export default function LifeEventsModule({
   const altCalendar = prefs?.enable_alternative_calendar ?? false;
 
   const createLifeEventMutation = useMutation({
-    mutationFn: (values: { label: string; happened_at: CalendarAwareDateValue; description?: string }) => {
+    mutationFn: (values: { life_event_type_id: number; label: string; happened_at: CalendarAwareDateValue; description?: string; participants?: string[] }) => {
       if (!selectedTimeline) throw new Error("No timeline");
       const data = {
         summary: values.label,
         happened_at: values.happened_at.date.toISOString(),
         description: values.description,
-        life_event_type_id: defaultLifeEventTypeId,
+        life_event_type_id: values.life_event_type_id,
         calendar_type: values.happened_at.calendarType,
         original_day: values.happened_at.originalDay ?? undefined,
         original_month: values.happened_at.originalMonth ?? undefined,
         original_year: values.happened_at.originalYear ?? undefined,
+        participants: values.participants,
       };
       if (editingLeId) {
         return api.lifeEvents.contactsTimelineEventsLifeEventsUpdate(String(vaultId), String(contactId), selectedTimeline, editingLeId, data);
@@ -149,6 +214,7 @@ export default function LifeEventsModule({
       queryClient.invalidateQueries({ queryKey: qk });
       setLeOpen(false);
       setEditingLeId(null);
+      setSelectedCategoryId(null);
       leForm.resetFields();
       message.success(editingLeId ? t("modules.life_events.event_updated") : t("modules.life_events.event_added"));
     },
@@ -192,7 +258,20 @@ export default function LifeEventsModule({
     key: tl.id,
     label: (
        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-         <span style={{ fontWeight: 500, opacity: tl.collapsed ? 0.5 : 1 }}>{tl.label} — <span style={{ color: token.colorTextSecondary, fontWeight: 400 }}>{formatMonthYear(tl.started_at, dateFormats)}</span></span>
+         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+           <span style={{ fontWeight: 500, opacity: tl.collapsed ? 0.5 : 1 }}>{tl.label} — <span style={{ color: token.colorTextSecondary, fontWeight: 400 }}>{formatMonthYear(tl.started_at, dateFormats)}</span></span>
+           {tl.participants && tl.participants.length > 0 && (
+             <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 2 }}>
+               {tl.participants.map(p => (
+                 <Link key={p.id} to={`/vaults/${vaultId}/contacts/${p.id}`} onClick={(e) => e.stopPropagation()}>
+                   <Tag bordered={false} style={{ margin: 0, fontSize: 12, cursor: "pointer" }}>
+                     {p.name}
+                   </Tag>
+                 </Link>
+               ))}
+             </div>
+           )}
+         </div>
         <Space>
           <Button
             type="text"
@@ -214,6 +293,7 @@ export default function LifeEventsModule({
               e.stopPropagation();
                setSelectedTimeline(tl.id ?? null);
                setEditingLeId(null);
+               setSelectedCategoryId(null);
                leForm.resetFields();
                leForm.setFieldsValue({ happened_at: buildCalendarAwareValue(dayjs(), "gregorian", null, null, null) });
                setLeOpen(true);
@@ -257,11 +337,22 @@ export default function LifeEventsModule({
                      </Tag>
                    )}
                  </Text>
-                {le.description && (
-                  <div style={{ marginTop: 4, color: token.colorTextSecondary }}>{le.description}</div>
-                )}
-              </div>
-              <div>
+                 {le.description && (
+                   <div style={{ marginTop: 4, color: token.colorTextSecondary }}>{le.description}</div>
+                 )}
+                 {le.participants && le.participants.length > 0 && (
+                   <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 6 }}>
+                     {le.participants.map(p => (
+                       <Link key={p.id} to={`/vaults/${vaultId}/contacts/${p.id}`} onClick={(e) => e.stopPropagation()}>
+                         <Tag bordered={false} style={{ margin: 0, fontSize: 12, cursor: "pointer" }}>
+                           {p.name}
+                         </Tag>
+                       </Link>
+                     ))}
+                   </div>
+                 )}
+               </div>
+               <div>
                 <Button
                   type="text"
                   size="small"
@@ -283,7 +374,13 @@ export default function LifeEventsModule({
                     e.stopPropagation();
                     setSelectedTimeline(tl.id ?? null);
                     setEditingLeId(le.id!);
+
+                    const catId = lifeEventCategories.find(c => c.types?.some(t => t.id === le.life_event_type_id))?.id;
+                    setSelectedCategoryId(catId ?? null);
+
                     leForm.setFieldsValue({
+                      category_id: catId,
+                      life_event_type_id: le.life_event_type_id,
                       label: le.summary,
                       happened_at: buildCalendarAwareValue(
                         le.happened_at,
@@ -293,6 +390,14 @@ export default function LifeEventsModule({
                         le.original_year,
                       ),
                       description: le.description,
+                      participants: (() => {
+                        const forcedIds = getForcedParticipantIds(tl.id);
+                        return le.participants?.flatMap((p) => {
+                          if (!p.id) return [];
+                          const participantId = String(p.id);
+                          return forcedIds.has(participantId) ? [] : [participantId];
+                        }) || [];
+                      })(),
                     });
                     setLeOpen(true);
                   }}
@@ -326,7 +431,18 @@ export default function LifeEventsModule({
         body: { padding: '16px 24px' },
       }}
       extra={
-        <Button type="text" icon={<PlusOutlined />} onClick={() => setTlOpen(true)} style={{ color: token.colorPrimary }}>
+        <Button
+          type="text"
+          icon={<PlusOutlined />}
+          onClick={() => {
+            setSelectedTimeline(null);
+            setEditingLeId(null);
+            setContactSearch("");
+            tlForm.resetFields();
+            setTlOpen(true);
+          }}
+          style={{ color: token.colorPrimary }}
+        >
           {t("modules.life_events.new_timeline")}
         </Button>
       }
@@ -360,17 +476,53 @@ export default function LifeEventsModule({
           <Form.Item name="started_at" label={t("modules.life_events.started_at")} rules={[{ required: true }]}>
             <DatePicker style={{ width: "100%" }} />
           </Form.Item>
+          <Form.Item name="participants" label={t("modules.life_events.participants")}>
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder={t("modules.life_events.participants_placeholder")}
+              showSearch
+              onSearch={setContactSearch}
+              filterOption={false}
+              options={contactOptions}
+            />
+          </Form.Item>
         </Form>
       </Modal>
 
       <Modal
         title={editingLeId ? t("modules.life_events.edit_event") : t("modules.life_events.event_modal")}
         open={leOpen}
-        onCancel={() => { setLeOpen(false); setEditingLeId(null); leForm.resetFields(); }}
+        onCancel={() => { setLeOpen(false); setEditingLeId(null); setSelectedCategoryId(null); leForm.resetFields(); }}
         onOk={() => leForm.submit()}
         confirmLoading={createLifeEventMutation.isPending}
       >
         <Form form={leForm} layout="vertical" onFinish={(v) => createLifeEventMutation.mutate(v)}>
+          <Form.Item
+            name="category_id"
+            label={t("vault.dashboard.select_category")}
+            rules={[{ required: true, message: t("common.required") }]}
+          >
+            <Select
+              placeholder={t("vault.dashboard.select_category")}
+              onChange={(v: number) => {
+                setSelectedCategoryId(v);
+                leForm.setFieldValue("life_event_type_id", undefined);
+              }}
+              options={lifeEventCategories.map((c) => ({ label: c.label, value: c.id }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="life_event_type_id"
+            label={t("vault.dashboard.select_type")}
+            rules={[{ required: true, message: t("common.required") }]}
+          >
+            <Select
+              placeholder={t("vault.dashboard.select_type")}
+              disabled={!selectedCategoryId}
+              options={filteredTypes.map((tp) => ({ label: tp.label, value: tp.id }))}
+            />
+          </Form.Item>
           <Form.Item name="label" label={t("modules.life_events.label")} rules={[{ required: true }]}>
             <Input />
           </Form.Item>
@@ -379,6 +531,17 @@ export default function LifeEventsModule({
           </Form.Item>
           <Form.Item name="description" label={t("common.description")}>
             <Input.TextArea rows={2} />
+          </Form.Item>
+          <Form.Item name="participants" label={t("modules.life_events.participants")}>
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder={t("modules.life_events.participants_placeholder")}
+              showSearch
+              onSearch={setContactSearch}
+              filterOption={false}
+              options={contactOptions}
+            />
           </Form.Item>
         </Form>
       </Modal>

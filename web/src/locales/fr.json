@@ -524,7 +524,14 @@
       "filter_archived": "Archivé",
       "filter_all": "Tous",
       "filter_favorites": "Favoris",
-      "filter_needs_verification": "Vérification nécessaire"
+      "filter_needs_verification": "Vérification nécessaire",
+      "bulk_move_selected": "Déplacer {{count}} sélectionnés",
+      "bulk_move_title": "Déplacer les contacts sélectionnés",
+      "bulk_move_count": "{{count}} contacts sélectionnés seront déplacés.",
+      "bulk_move_select_vault": "Vault de destination",
+      "bulk_move_no_targets": "Aucun autre vault disponible",
+      "bulk_move": "Déplacer les contacts",
+      "bulk_move_success": "{{count}} contacts déplacés"
     },
     "needs_verification": {
       "badge": "A vérifier",
@@ -840,12 +847,24 @@
       "settled": "Réglé",
       "settled_at": "Réglé {{date}}",
       "modal_title": "Ajouter un prêt",
+      "category": "Catégorie",
+      "category_money": "Argent",
+      "category_item": "Objet",
       "name": "Nom",
       "direction": "Direction",
-      "i_lent": "j'ai prêté de l'argent",
-      "i_borrowed": "j'ai emprunté de l'argent",
+      "i_lent": "J'ai prêté",
+      "i_borrowed": "J'ai emprunté",
       "amount": "Montant",
-      "currency": "Devise"
+      "currency": "Devise",
+      "currency_placeholder": "Sélectionnez une devise",
+      "item_name": "Nom de l'objet",
+      "quantity": "Quantité",
+      "quantity_value": "Qté : {{count}}",
+      "due_date": "Date d'échéance",
+      "due_at": "Échéance {{date}}",
+      "mark_returned": "Marquer comme rendu",
+      "returned": "Rendu",
+      "returned_at": "Rendu {{date}}"
     },
     "gifts": {
       "title": "Cadeaux",
@@ -923,6 +942,9 @@
       "new_timeline": "Nouvelle chronologie",
       "no_timelines": "Aucune chronologie des événements de la vie",
       "no_events": "Aucun événement de la vie dans cette chronologie",
+      "participants": "Autres participants",
+      "participants_placeholder": "Sélectionnez des participants...",
+      "self_participant": "Vous",
       "event": "Événement",
       "delete_timeline_confirm": "Supprimer la chronologie ?",
       "delete_event_confirm": "Supprimer?",
@@ -1561,11 +1583,12 @@
         "refresh_hrs": "Fenêtre d'actualisation (heures)"
       },
       "smtp": {
-        "host": "SMTP Hôte",
-        "port": "SMTP Port",
-        "username": "SMTP Nom d'utilisateur",
-        "password": "SMTP Mot de passe",
-        "from": "E-mail de l'expéditeur"
+        "host": "Hôte SMTP",
+        "port": "Port SMTP",
+        "username": "Nom d'utilisateur SMTP",
+        "password": "Mot de passe SMTP",
+        "password_hint": "*** conserve le mot de passe existant. Tapez une nouvelle valeur pour le remplacer.",
+        "from": "Email de l'expéditeur"
       },
       "webauthn": {
         "rp_id": "ID de partie utilisatrice",
