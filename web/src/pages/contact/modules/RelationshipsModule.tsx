@@ -45,9 +45,11 @@ type RelationshipFormValues = {
 export default function RelationshipsModule({
   vaultId,
   contactId,
+  currentContactName,
 }: {
   vaultId: string | number;
   contactId: string | number;
+  currentContactName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -59,6 +61,7 @@ export default function RelationshipsModule({
   // Cross-vault contacts query: returns contacts from ALL accessible vaults
   const qk = ["vaults", vaultId, "contacts", contactId, "relationships"];
   const selectedTargetKind = Form.useWatch("target_kind", form) ?? RELATIONSHIP_TARGET_KINDS.existing;
+  const selectedRelationshipTypeId = Form.useWatch("relationship_type_id", form) as number | undefined;
 
   const { data: relationships = [], isLoading } = useQuery({
     queryKey: qk,
@@ -89,13 +92,59 @@ export default function RelationshipsModule({
     },
   });
 
+  const editingRelationship = useMemo(() => {
+    if (editingId == null) return null;
+    return relationships.find((relationship: Relationship) => relationship.id === editingId) ?? null;
+  }, [editingId, relationships]);
+
+  const selectableContacts = useMemo(() => {
+    if (editingRelationship == null || !editingRelationship.related_contact_id) return crossVaultContacts;
+    const hasRelatedContactOption = crossVaultContacts.some(
+      (contact) => contact.contact_id === editingRelationship.related_contact_id,
+    );
+    if (hasRelatedContactOption) return crossVaultContacts;
+    return [
+      ...crossVaultContacts,
+      {
+        contact_id: editingRelationship.related_contact_id,
+        contact_name: editingRelationship.related_contact_name ?? editingRelationship.related_contact_id,
+        vault_id: editingRelationship.related_vault_id ?? String(vaultId),
+        vault_name: editingRelationship.related_vault_name ?? "",
+        has_editor: true,
+      },
+    ];
+  }, [crossVaultContacts, editingRelationship, vaultId]);
+
   // Track whether the selected contact lacks editor permission (one-way only)
   const selectedContactId = Form.useWatch("related_contact_id", form);
   const selectedContactOneWay = useMemo(() => {
     if (selectedTargetKind !== RELATIONSHIP_TARGET_KINDS.existing || !selectedContactId) return false;
-    const c = crossVaultContacts.find((x) => x.contact_id === selectedContactId);
+    const c = selectableContacts.find((x) => x.contact_id === selectedContactId);
     return c ? c.has_editor === false : false;
-  }, [selectedTargetKind, selectedContactId, crossVaultContacts]);
+  }, [selectableContacts, selectedTargetKind, selectedContactId]);
+
+  const selectedRelationshipTypeName = useMemo(() => {
+    if (selectedRelationshipTypeId == null) return "";
+    const selectedRelationshipType = relationshipTypes.find((relationshipType) => relationshipType.id === selectedRelationshipTypeId);
+    return selectedRelationshipType?.name ?? "";
+  }, [relationshipTypes, selectedRelationshipTypeId]);
+
+  const selectedContactName = useMemo(() => {
+    if (selectedTargetKind !== RELATIONSHIP_TARGET_KINDS.existing || !selectedContactId) return "";
+    const selectedContact = selectableContacts.find((contact) => contact.contact_id === selectedContactId);
+    return selectedContact?.contact_name ?? "";
+  }, [selectableContacts, selectedContactId, selectedTargetKind]);
+
+  const relationshipDirectionHint = useMemo(() => {
+    if (!currentContactName || !selectedRelationshipTypeName || !selectedContactName) {
+      return t("modules.relationships.direction_hint");
+    }
+    return t("modules.relationships.direction_hint_named", {
+      currentContactName,
+      relationshipTypeName: selectedRelationshipTypeName,
+      selectedContactName,
+    });
+  }, [currentContactName, selectedContactName, selectedRelationshipTypeName, t]);
 
   // Build grouped options for the relationship type Select (OptGroup by group name).
   const typeSelectOptions = useMemo(() => {
@@ -155,7 +204,7 @@ export default function RelationshipsModule({
   // Group contacts by vault for OptGroup display, append one-way suffix for non-editor contacts
   const contactOptions = useMemo(() => {
     const groups = new Map<string, { value: string; label: string }[]>();
-    for (const c of crossVaultContacts) {
+    for (const c of selectableContacts) {
       if (!c.contact_id || c.contact_id === String(contactId)) continue;
       const vaultName = c.vault_name ?? "";
       const suffix = c.has_editor === false ? ` · ${t("modules.relationships.one_way_only")}` : "";
@@ -171,7 +220,7 @@ export default function RelationshipsModule({
       label: group,
       options,
     }));
-  }, [crossVaultContacts, contactId, t]);
+  }, [contactId, selectableContacts, t]);
 
   function handleRelationshipSubmit(values: RelationshipFormValues) {
     if (values.relationship_type_id == null) return;
@@ -356,7 +405,7 @@ export default function RelationshipsModule({
             />
           </Form.Item>
           <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: -16, marginBottom: 12 }}>
-            {t("modules.relationships.direction_hint")}
+            {relationshipDirectionHint}
           </div>
           <div style={{ marginTop: -12, marginBottom: 24 }}>
             <a onClick={() => window.open("/settings/personalize", "_blank")} style={{ fontSize: 12, color: token.colorPrimary }}>
