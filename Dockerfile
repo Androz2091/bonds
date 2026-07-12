@@ -34,9 +34,15 @@ COPY --from=frontend /build/web/dist ./internal/frontend/dist/
 
 RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o bonds-server cmd/server/main.go
 
-FROM alpine:3.21
+FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates sqlite-libs tzdata
+# PostgreSQL backup/restore shells out to pg_dump/psql in BackupService.
+# Keep the packaged client major aligned with the latest supported server major.
+RUN apk add --no-cache \
+    ca-certificates \
+    postgresql18-client \
+    sqlite-libs \
+    tzdata
 WORKDIR /app
 COPY --from=backend /build/bonds-server .
 RUN mkdir -p /app/data

@@ -2,6 +2,7 @@ package dav
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -176,11 +177,11 @@ func TestListAddressObjects(t *testing.T) {
 	foundBob := false
 	for _, obj := range objects {
 		card := mustDecodeAddressObjectCard(t, obj)
-		if card.Value(vcard.FieldVersion) != "4.0" {
-			t.Fatalf("expected VERSION 4.0, got %q", card.Value(vcard.FieldVersion))
+		if card.Value(vcard.FieldVersion) != "3.0" {
+			t.Fatalf("expected VERSION 3.0, got %q", card.Value(vcard.FieldVersion))
 		}
-		if card.Kind() != vcard.KindIndividual {
-			t.Fatalf("expected KIND individual, got %q", card.Kind())
+		if card.Value(vcard.FieldKind) != "" {
+			t.Fatalf("expected KIND to be absent, got %q", card.Value(vcard.FieldKind))
 		}
 		if card.Value(vcard.FieldUID) == "" {
 			t.Fatal("expected UID to be set")
@@ -219,6 +220,9 @@ func TestListAddressObjects(t *testing.T) {
 		if obj.ETag == "" {
 			t.Error("Expected non-empty ETag")
 		}
+		if !strings.HasPrefix(obj.ETag, "v3-") {
+			t.Errorf("Expected v3 ETag marker, got %q", obj.ETag)
+		}
 		if obj.Path == "" {
 			t.Error("Expected non-empty Path")
 		}
@@ -228,6 +232,37 @@ func TestListAddressObjects(t *testing.T) {
 	}
 	if !foundBob {
 		t.Error("Expected to find Bob Jones in address objects")
+	}
+}
+
+func TestListAddressObjects_ExcludesArchivedContacts(t *testing.T) {
+	backend, db, ctx, vaultID, userID := setupCardDAVTest(t)
+
+	activeContact := createTestContact(t, db, vaultID, userID, "Active", "Person")
+	archivedContact := createTestContact(t, db, vaultID, userID, "Archived", "Person")
+	if err := db.Model(&models.Contact{}).Where("id = ?", archivedContact.ID).Update("listed", false).Error; err != nil {
+		t.Fatalf("archive contact: %v", err)
+	}
+
+	path := "/dav/addressbooks/" + userID + "/" + vaultID + "/"
+
+	// Given an active contact and an archived contact in the same vault.
+	// When CardDAV lists the address book.
+	objects, err := backend.ListAddressObjects(ctx, path, &carddav.AddressDataRequest{AllProp: true})
+	if err != nil {
+		t.Fatalf("ListAddressObjects failed: %v", err)
+	}
+
+	// Then only the active contact should be synced.
+	if len(objects) != 1 {
+		t.Fatalf("expected 1 address object after excluding archived contacts, got %d", len(objects))
+	}
+	card := mustDecodeAddressObjectCard(t, objects[0])
+	if got := card.Value(vcard.FieldUID); got != activeContact.ID {
+		t.Fatalf("expected active contact UID %q, got %q", activeContact.ID, got)
+	}
+	if got := card.Value(vcard.FieldFormattedName); got != "Active Person" {
+		t.Fatalf("expected active contact FN, got %q", got)
 	}
 }
 
@@ -259,11 +294,11 @@ func TestGetAddressObject(t *testing.T) {
 		t.Fatalf("GetAddressObject failed: %v", err)
 	}
 	card := mustDecodeAddressObjectCard(t, *obj)
-	if got := card.Value(vcard.FieldVersion); got != "4.0" {
-		t.Fatalf("expected VERSION 4.0, got %q", got)
+	if got := card.Value(vcard.FieldVersion); got != "3.0" {
+		t.Fatalf("expected VERSION 3.0, got %q", got)
 	}
-	if card.Kind() != vcard.KindIndividual {
-		t.Fatalf("expected KIND individual, got %q", card.Kind())
+	if got := card.Value(vcard.FieldKind); got != "" {
+		t.Fatalf("expected KIND to be absent, got %q", got)
 	}
 	if got := card.Value(vcard.FieldUID); got != contact.ID {
 		t.Fatalf("expected UID %q, got %q", contact.ID, got)
@@ -294,11 +329,31 @@ func TestGetAddressObject(t *testing.T) {
 	}
 }
 
+func TestGetAddressObject_ReturnsNotFoundForArchivedContact(t *testing.T) {
+	backend, db, ctx, vaultID, userID := setupCardDAVTest(t)
+
+	archivedContact := createTestContact(t, db, vaultID, userID, "Archived", "Person")
+	if err := db.Model(&models.Contact{}).Where("id = ?", archivedContact.ID).Update("listed", false).Error; err != nil {
+		t.Fatalf("archive contact: %v", err)
+	}
+
+	path := "/dav/addressbooks/" + userID + "/" + vaultID + "/" + archivedContact.ID + ".vcf"
+
+	// Given an archived contact path.
+	// When CardDAV fetches the address object directly.
+	obj, err := backend.GetAddressObject(ctx, path, &carddav.AddressDataRequest{AllProp: true})
+
+	// Then archived contacts should not be exposed through direct DAV fetches.
+	if err == nil {
+		t.Fatalf("expected archived contact fetch to fail, got object %+v", obj)
+	}
+}
+
 func TestPutAddressObject(t *testing.T) {
 	backend, db, ctx, vaultID, userID := setupCardDAVTest(t)
 
 	card := make(vcard.Card)
-	card.SetValue(vcard.FieldVersion, "4.0")
+	card.SetValue(vcard.FieldVersion, "3.0")
 	card.SetValue(vcard.FieldFormattedName, "Dave Wilson")
 	card.SetName(&vcard.Name{
 		GivenName:  "Dave",

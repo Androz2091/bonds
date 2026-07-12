@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -62,12 +63,13 @@ type authData struct {
 }
 
 type userData struct {
-	ID        string `json:"id"`
-	AccountID string `json:"account_id"`
-	FirstName string `json:"first_name"`
-	LastName  string `json:"last_name"`
-	Email     string `json:"email"`
-	IsAdmin   bool   `json:"is_admin"`
+	ID                      string `json:"id"`
+	AccountID               string `json:"account_id"`
+	FirstName               string `json:"first_name"`
+	LastName                string `json:"last_name"`
+	Email                   string `json:"email"`
+	IsAdmin                 bool   `json:"is_admin"`
+	IsInstanceAdministrator bool   `json:"is_instance_administrator"`
 }
 
 type vaultData struct {
@@ -443,6 +445,24 @@ func TestMe_WithValidToken(t *testing.T) {
 	}
 	if data.ID != regData.User.ID {
 		t.Errorf("expected id=%s, got %s", regData.User.ID, data.ID)
+	}
+}
+
+func TestMe_FirstUserIncludesInstanceAdministrator(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "me-instance-admin@example.com")
+
+	rec := ts.doRequest(http.MethodGet, "/api/auth/me", "", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	var data userData
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		t.Fatalf("failed to parse user data: %v", err)
+	}
+	if !data.IsInstanceAdministrator {
+		t.Fatal("expected first user to include is_instance_administrator=true in /auth/me response")
 	}
 }
 
@@ -2456,8 +2476,15 @@ func TestVCard_ExportContact(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	contentType := rec.Header().Get("Content-Type")
-	if !strings.Contains(contentType, "text/vcard") {
-		t.Errorf("expected Content-Type containing text/vcard, got %s", contentType)
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Fatalf("parse Content-Type %q: %v", contentType, err)
+	}
+	if mediaType != "text/vcard" {
+		t.Errorf("expected Content-Type text/vcard, got %s", contentType)
+	}
+	if params["charset"] != "utf-8" {
+		t.Errorf("expected charset=utf-8, got %s", contentType)
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "BEGIN:VCARD") {
@@ -2478,8 +2505,15 @@ func TestVCard_ExportVault(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	contentType := rec.Header().Get("Content-Type")
-	if !strings.Contains(contentType, "text/vcard") {
-		t.Errorf("expected Content-Type containing text/vcard, got %s", contentType)
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Fatalf("parse Content-Type %q: %v", contentType, err)
+	}
+	if mediaType != "text/vcard" {
+		t.Errorf("expected Content-Type text/vcard, got %s", contentType)
+	}
+	if params["charset"] != "utf-8" {
+		t.Errorf("expected charset=utf-8, got %s", contentType)
 	}
 }
 
@@ -6033,6 +6067,88 @@ func TestVaultSettingsLifeEventTypeCRUDViaTypesRoutes(t *testing.T) {
 	}
 }
 
+func TestVaultSettingsDeleteSeededLifeEventTypeViaTypesRoutes(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "seeded-life-event-type-delete@example.com")
+	vault := ts.createTestVault(t, token, "Seeded Life Event Types Vault")
+
+	rec := ts.doRequest(http.MethodGet, fmt.Sprintf("/api/vaults/%s/settings/lifeEventCategories", vault.ID), "", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list life event categories: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	var categories []struct {
+		ID    uint `json:"id"`
+		Types []struct {
+			ID uint `json:"id"`
+		} `json:"types"`
+	}
+	if err := json.Unmarshal(resp.Data, &categories); err != nil {
+		t.Fatalf("parse seeded categories failed: %v", err)
+	}
+	if len(categories) == 0 || len(categories[0].Types) == 0 {
+		t.Fatal("expected seeded life event category and type")
+	}
+	targetCategoryID := categories[0].ID
+	targetTypeID := categories[0].Types[0].ID
+
+	rec = ts.doRequest(http.MethodDelete, fmt.Sprintf("/api/vaults/%s/settings/lifeEventCategories/%d/types/%d", vault.ID, targetCategoryID, targetTypeID), "", token)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete seeded life event type via /types route: expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var deletedCount int64
+	if err := ts.db.Model(&models.LifeEventType{}).Where("id = ?", targetTypeID).Count(&deletedCount).Error; err != nil {
+		t.Fatalf("count deleted seeded life event type failed: %v", err)
+	}
+	if deletedCount != 0 {
+		t.Fatalf("expected deleted seeded life event type count 0, got %d", deletedCount)
+	}
+}
+
+func TestVaultSettingsDeleteSeededLifeEventCategory(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "seeded-life-event-category-delete@example.com")
+	vault := ts.createTestVault(t, token, "Seeded Life Event Categories Vault")
+
+	rec := ts.doRequest(http.MethodGet, fmt.Sprintf("/api/vaults/%s/settings/lifeEventCategories", vault.ID), "", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list life event categories: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	var categories []struct {
+		ID uint `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Data, &categories); err != nil {
+		t.Fatalf("parse seeded categories failed: %v", err)
+	}
+	if len(categories) == 0 {
+		t.Fatal("expected seeded life event category")
+	}
+	targetCategoryID := categories[0].ID
+
+	rec = ts.doRequest(http.MethodDelete, fmt.Sprintf("/api/vaults/%s/settings/lifeEventCategories/%d", vault.ID, targetCategoryID), "", token)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete seeded life event category: expected 204, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var deletedCategoryCount int64
+	if err := ts.db.Model(&models.LifeEventCategory{}).Where("id = ?", targetCategoryID).Count(&deletedCategoryCount).Error; err != nil {
+		t.Fatalf("count deleted seeded life event category failed: %v", err)
+	}
+	if deletedCategoryCount != 0 {
+		t.Fatalf("expected deleted seeded life event category count 0, got %d", deletedCategoryCount)
+	}
+
+	var orphanTypeCount int64
+	if err := ts.db.Model(&models.LifeEventType{}).Where("life_event_category_id = ?", targetCategoryID).Count(&orphanTypeCount).Error; err != nil {
+		t.Fatalf("count seeded category child types failed: %v", err)
+	}
+	if orphanTypeCount != 0 {
+		t.Fatalf("expected seeded category child types deleted, got %d", orphanTypeCount)
+	}
+}
+
 func TestContactBulkMove_MovesSelectedContacts(t *testing.T) {
 	ts := setupTestServer(t)
 	token, _ := ts.registerTestUser(t, "bulk-move-handler@example.com")
@@ -6606,6 +6722,60 @@ func TestCompanyEmployee_AddAndRemove(t *testing.T) {
 	}
 	if len(companyAfter.Contacts) != 0 {
 		t.Errorf("expected 0 employees after remove, got %d", len(companyAfter.Contacts))
+	}
+}
+
+func TestContactsSelectable_IncludesArchivedAndExcludesShadow(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "contacts-selectable@example.com")
+	vault := ts.createTestVault(t, token, "Selectable Contacts Vault")
+	active := ts.createTestContact(t, token, vault.ID, "Active")
+	archived := ts.createTestContact(t, token, vault.ID, "Archived")
+
+	archiveRec := ts.doRequest(http.MethodPut, "/api/vaults/"+vault.ID+"/contacts/"+archived.ID+"/archive", "", token)
+	if archiveRec.Code != http.StatusOK {
+		t.Fatalf("archive contact: expected 200, got %d: %s", archiveRec.Code, archiveRec.Body.String())
+	}
+
+	rec := ts.doRequest(http.MethodGet, "/api/vaults/"+vault.ID+"/contacts/selectable", "", token)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list selectable contacts: expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	resp := parseResponse(t, rec)
+	var selectable []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(resp.Data, &selectable); err != nil {
+		t.Fatalf("failed to parse selectable contacts: %v", err)
+	}
+	if len(selectable) != 2 {
+		t.Fatalf("expected 2 selectable contacts (active + archived, no shadow), got %d", len(selectable))
+	}
+	selectableIDs := map[string]bool{}
+	for _, item := range selectable {
+		selectableIDs[item.ID] = true
+	}
+	if !selectableIDs[active.ID] {
+		t.Fatalf("expected active contact %s in selectable list", active.ID)
+	}
+	if !selectableIDs[archived.ID] {
+		t.Fatalf("expected archived contact %s in selectable list", archived.ID)
+	}
+
+	searchRec := ts.doRequest(http.MethodGet, "/api/vaults/"+vault.ID+"/contacts/selectable?search=Archived", "", token)
+	if searchRec.Code != http.StatusOK {
+		t.Fatalf("search selectable contacts: expected 200, got %d: %s", searchRec.Code, searchRec.Body.String())
+	}
+	searchResp := parseResponse(t, searchRec)
+	var filtered []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(searchResp.Data, &filtered); err != nil {
+		t.Fatalf("failed to parse filtered selectable contacts: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].ID != archived.ID {
+		t.Fatalf("expected archived contact search result, got %+v", filtered)
 	}
 }
 
