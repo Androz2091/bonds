@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -58,7 +59,7 @@ func (s *OAuthService) FindOrCreateUser(provider, providerUserID, email, name, l
 	}
 
 	var existingUser models.User
-	err = s.db.Where("email = ?", email).First(&existingUser).Error
+	err = s.db.Where("LOWER(email) = ?", strings.ToLower(strings.TrimSpace(email))).First(&existingUser).Error
 	if err == nil {
 		if existingUser.EmailVerifiedAt == nil {
 			verifiedNow := time.Now()

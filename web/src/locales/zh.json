@@ -49,6 +49,7 @@
     "view_release": "查看新版本"
   },
   "nav": {
+    "accounts": "切换账户",
     "vaults": "保险库",
     "settings": "设置",
     "vault": "保险库",
@@ -660,6 +661,7 @@
       "sort_first_met": "初次见面",
       "sort_updated": "最后更新",
       "filter_label": "标签筛选",
+      "filter_company": "按公司筛选",
       "all_labels": "所有标签",
       "filter_group": "群组筛选",
       "all_groups": "所有群组",
@@ -1463,6 +1465,7 @@
     "invite": "邀请用户",
     "email": "邮箱地址",
     "permission": "权限",
+    "account_member": "账户成员（无保险库权限）",
     "permission.manager": "管理员",
     "permission.editor": "编辑者",
     "permission.viewer": "查看者",
@@ -1473,9 +1476,32 @@
     "delete": "取消邀请",
     "deleteConfirm": "确定取消该邀请？"
   },
+  "emailChange": {
+    "title": "确认修改邮箱",
+    "confirm": "确认这个邮箱地址",
+    "done": "已确认。新旧邮箱都确认后才会更改登录邮箱，随后请用新邮箱登录。",
+    "login": "前往登录"
+  },
+  "setPassword": {
+    "title": "设置密码",
+    "password": "新密码",
+    "confirm": "确认密码",
+    "mismatch": "两次输入的密码不一致",
+    "submit": "保存密码",
+    "success": "密码已更新，请登录。",
+    "invalid": "链接无效或已过期，请让管理员重新发送。"
+  },
   "acceptInvite": {
     "title": "接受邀请",
-    "subtitle": "你已被邀请加入，请创建账户以开始使用。",
+    "subtitle": "已有账号可直接接受邀请；首次使用才需要创建账号。",
+    "vaultScope": "仅加入指定 Vault",
+    "accountScope": "加入 Account（不会自动加入 Vault）",
+    "invalid": "邀请无效或已过期。",
+    "signedInAs": "当前登录：{{email}}",
+    "acceptExisting": "使用当前账号接受",
+    "switchUser": "使用其他账号登录",
+    "haveAccount": "已有账号？登录后接受",
+    "accepted": "邀请已接受",
     "submit": "创建账户",
     "firstName": "名",
     "lastName": "姓",
@@ -1543,6 +1569,11 @@
     "users": "用户",
     "default_template": "默认模板",
     "add_category": "添加分类",
+    "life_presets_title": "人生事件",
+    "life_presets_description": "为此保险库添加可选的人生事件活动类型，不改变现有活动。",
+    "life_presets_confirm": "安装缺少的人生事件类型？之前删除的类型可能重新出现。",
+    "life_presets_install": "安装人生事件类型",
+    "life_presets_installed": "人生事件类型已就绪",
     "add_type": "添加类型",
     "add_user": "添加用户",
     "hex_color": "十六进制颜色",
@@ -1687,6 +1718,14 @@
     "cron_enabled_label": "已启用"
   },
   "admin": {
+    "audit": {
+      "title": "系统与安全日志",
+      "description": "仅记录后台操作和服务器错误；不展示私人保险库的内容或访问轨迹。",
+      "time": "时间",
+      "action": "操作",
+      "status": "状态",
+      "request_id": "请求 ID"
+    },
     "tab_users": "用户",
     "tab_settings": "设置",
     "tab_backups": "备份",
@@ -1726,6 +1765,16 @@
     },
     "users": {
       "title": "用户管理",
+      "create": "创建用户",
+      "create_hint": "将创建独立的私人账户，用户通过一次性邮件链接自行设置密码。请先配置 SMTP；此操作不授予保险库权限。",
+      "created_email": "用户已创建，密码设置邮件已发送",
+      "first_name": "名",
+      "last_name": "姓",
+      "reset_password": "发送重置密码邮件",
+      "reset_sent": "密码重置邮件已发送给用户",
+      "edit_identity": "编辑用户身份",
+      "email_confirmation_hint": "修改邮箱需要新旧两个邮箱共同确认。密码和保险库权限仍属于同一个用户。",
+      "email_confirmation_sent": "确认链接已发送至新旧两个邮箱",
       "description": "管理此实例上的所有注册用户",
       "name": "姓名",
       "email": "邮箱",

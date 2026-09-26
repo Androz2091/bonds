@@ -501,17 +501,30 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 }
 
 func (s *VaultService) CheckUserVaultAccess(userID, vaultID string, requiredPerm int) error {
-	var uv models.UserVault
-	if err := s.db.Where("user_id = ? AND vault_id = ?", userID, vaultID).First(&uv).Error; err != nil {
+	_, err := s.CheckUserVaultAccessWithAccount(userID, vaultID, requiredPerm)
+	return err
+}
+
+// CheckUserVaultAccessWithAccount returns the owning account only after
+// verifying vault membership. It does not grant account-settings access.
+func (s *VaultService) CheckUserVaultAccessWithAccount(userID, vaultID string, requiredPerm int) (string, error) {
+	var membership struct {
+		Permission int
+		AccountID  string
+	}
+	if err := s.db.Table("user_vault").Select("user_vault.permission, vaults.account_id").
+		Joins("JOIN vaults ON vaults.id = user_vault.vault_id").
+		Where("user_vault.user_id = ? AND user_vault.vault_id = ?", userID, vaultID).
+		Take(&membership).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrVaultForbidden
+			return "", ErrVaultForbidden
 		}
-		return err
+		return "", err
 	}
-	if uv.Permission > requiredPerm {
-		return ErrInsufficientPerm
+	if membership.Permission > requiredPerm {
+		return "", ErrInsufficientPerm
 	}
-	return nil
+	return membership.AccountID, nil
 }
 
 func GetUserNameOrder(db *gorm.DB, userID string) (string, error) {

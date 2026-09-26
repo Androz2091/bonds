@@ -6,9 +6,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/models"
+	userTimezone "github.com/naiba/bonds/internal/timezone"
 	"github.com/naiba/bonds/pkg/response"
 	"gorm.io/gorm"
 )
@@ -21,12 +23,108 @@ var (
 )
 
 type AdminService struct {
-	db        *gorm.DB
-	uploadDir string
+	db          *gorm.DB
+	uploadDir   string
+	credentials *CredentialActionService
 }
 
 func NewAdminService(db *gorm.DB, uploadDir string) *AdminService {
 	return &AdminService{db: db, uploadDir: uploadDir}
+}
+
+func (s *AdminService) SetCredentialActions(service *CredentialActionService) {
+	s.credentials = service
+}
+
+// CreateUser provisions a separate, private home account. The operator never
+// receives a password or gains access to the user's vaults. The new user
+// chooses their own password using a one-time email link.
+func (s *AdminService) CreateUser(req dto.AdminCreateUserRequest) (*dto.AdminUserResponse, error) {
+	if s.credentials == nil {
+		return nil, ErrMailerNotConfigured
+	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	var existing int64
+	if err := s.db.Model(&models.User{}).Where("LOWER(email) = ?", email).Count(&existing).Error; err != nil {
+		return nil, err
+	}
+	if existing != 0 {
+		return nil, ErrEmailExists
+	}
+	var user models.User
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		account := models.Account{}
+		if err := tx.Create(&account).Error; err != nil {
+			return err
+		}
+		tz := userTimezone.Default
+		user = models.User{AccountID: account.ID, Email: email, FirstName: strPtrOrNil(req.FirstName),
+			LastName: strPtrOrNil(req.LastName), Timezone: &tz, Locale: "en", IsAccountAdministrator: true}
+		if err := tx.Create(&user).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&models.AccountMembership{AccountID: account.ID, UserID: user.ID, IsAdmin: true}).Error; err != nil {
+			return err
+		}
+		if err := models.SeedAccountDefaults(tx, account.ID, user.ID, email, "en"); err != nil {
+			return err
+		}
+		return s.credentials.Send(tx, &user, "password_setup")
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := s.toAdminUserResponse(user)
+	return &result, nil
+}
+
+func (s *AdminService) SendPasswordReset(targetID string) error {
+	if s.credentials == nil {
+		return ErrMailerNotConfigured
+	}
+	var user models.User
+	if err := s.db.First(&user, "id = ?", targetID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrAdminUserNotFound
+		}
+		return err
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		return s.credentials.Send(tx, &user, "password_reset")
+	})
+}
+
+func (s *AdminService) UpdateIdentity(targetID string, req dto.AdminUpdateIdentityRequest) (*dto.AdminUserResponse, error) {
+	var user models.User
+	if err := s.db.First(&user, "id = ?", targetID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrAdminUserNotFound
+		}
+		return nil, err
+	}
+	if err := s.db.Model(&user).Updates(map[string]interface{}{"first_name": strings.TrimSpace(req.FirstName), "last_name": strings.TrimSpace(req.LastName)}).Error; err != nil {
+		return nil, err
+	}
+	result := s.toAdminUserResponse(user)
+	result.FirstName = strings.TrimSpace(req.FirstName)
+	result.LastName = strings.TrimSpace(req.LastName)
+	return &result, nil
+}
+
+func (s *AdminService) RequestEmailChange(targetID, email string) error {
+	if s.credentials == nil {
+		return ErrMailerNotConfigured
+	}
+	var user models.User
+	if err := s.db.First(&user, "id = ?", targetID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrAdminUserNotFound
+		}
+		return err
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		return s.credentials.RequestEmailChange(tx, &user, email)
+	})
 }
 
 func (s *AdminService) ListUsers(page, perPage int) ([]dto.AdminUserResponse, response.Meta, error) {
@@ -62,23 +160,46 @@ func (s *AdminService) ListUsers(page, perPage int) ([]dto.AdminUserResponse, re
 	return result, meta, nil
 }
 
-func adminContactCountSQL() string {
-	return `
-		SELECT COUNT(DISTINCT c.id)
-		FROM contacts c
-		INNER JOIN vaults v ON c.vault_id = v.id
-		WHERE v.account_id = ?`
+func (s *AdminService) ListAudit(page, perPage int) ([]dto.AuditEventResponse, response.Meta, error) {
+	return s.listAudit(nil, page, perPage)
+}
+
+func (s *AdminService) ListVaultAudit(vaultID string, page, perPage int) ([]dto.AuditEventResponse, response.Meta, error) {
+	return s.listAudit(&vaultID, page, perPage)
+}
+
+func (s *AdminService) listAudit(vaultID *string, page, perPage int) ([]dto.AuditEventResponse, response.Meta, error) {
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 || perPage > 100 {
+		perPage = 25
+	}
+	var total int64
+	query := s.db.Model(&models.AuditEvent{})
+	if vaultID == nil {
+		query = query.Where("vault_id IS NULL")
+	} else {
+		query = query.Where("vault_id = ?", *vaultID)
+	}
+	if err := query.Count(&total).Error; err != nil {
+		return nil, response.Meta{}, err
+	}
+	var rows []models.AuditEvent
+	if err := query.Order("id DESC").Limit(perPage).Offset((page - 1) * perPage).Find(&rows).Error; err != nil {
+		return nil, response.Meta{}, err
+	}
+	result := make([]dto.AuditEventResponse, len(rows))
+	for i, row := range rows {
+		result[i] = dto.AuditEventResponse{ID: row.ID, ActorUserID: row.ActorUserID,
+			AccountID: row.AccountID, VaultID: row.VaultID, Method: row.Method, Route: row.Route,
+			Status: row.Status, RequestID: row.RequestID, CreatedAt: row.CreatedAt}
+	}
+	return result, response.Meta{Page: page, PerPage: perPage, Total: total,
+		TotalPages: int(math.Ceil(float64(total) / float64(perPage)))}, nil
 }
 
 func (s *AdminService) toAdminUserResponse(u models.User) dto.AdminUserResponse {
-	var contactCount int64
-	s.db.Raw(adminContactCountSQL(), u.AccountID).Scan(&contactCount)
-
-	var vaultCount int64
-	s.db.Model(&models.Vault{}).Where("account_id = ?", u.AccountID).Count(&vaultCount)
-
-	storageUsed := s.calculateStorageUsed(u.AccountID)
-
 	var account models.Account
 	s.db.First(&account, "id = ?", u.AccountID)
 
@@ -91,26 +212,9 @@ func (s *AdminService) toAdminUserResponse(u models.User) dto.AdminUserResponse 
 		IsAccountAdministrator:  u.IsAccountAdministrator,
 		IsInstanceAdministrator: u.IsInstanceAdministrator,
 		Disabled:                u.Disabled,
-		ContactCount:            contactCount,
-		StorageUsed:             storageUsed,
 		StorageLimitInMB:        account.StorageLimitInMB,
-		VaultCount:              vaultCount,
 		CreatedAt:               u.CreatedAt,
 	}
-}
-
-func (s *AdminService) calculateStorageUsed(accountID string) int64 {
-	var files []models.File
-	s.db.Joins("INNER JOIN vaults ON files.vault_id = vaults.id").
-		Where("vaults.account_id = ?", accountID).
-		Select("files.uuid, files.size").
-		Find(&files)
-
-	var totalSize int64
-	for _, f := range files {
-		totalSize += int64(f.Size)
-	}
-	return totalSize
 }
 
 func (s *AdminService) ToggleUser(actorID, targetID string, disabled bool) error {
@@ -177,9 +281,10 @@ func (s *AdminService) DeleteUser(actorID, targetID string) error {
 		return err
 	}
 
-	// Count how many users share this account (invitation system allows multiple users per account).
+	// Memberships, not home-account IDs, are authoritative. Other users may
+	// have joined this account without changing their original home account.
 	var accountUserCount int64
-	if err := s.db.Model(&models.User{}).Where("account_id = ?", user.AccountID).Count(&accountUserCount).Error; err != nil {
+	if err := s.db.Model(&models.AccountMembership{}).Where("account_id = ?", user.AccountID).Count(&accountUserCount).Error; err != nil {
 		return err
 	}
 
@@ -238,6 +343,7 @@ func (s *AdminService) deleteEntireAccount(user models.User) error {
 
 		accountTables := []interface{}{
 			&models.Invitation{},
+			&models.AccountMembership{},
 			&models.AccountCurrency{},
 			&models.TaskStatus{},
 			&models.Gender{},
@@ -310,6 +416,9 @@ func (s *AdminService) deleteUserDirectData(tx *gorm.DB, userID string) error {
 	}
 
 	userTables := []interface{}{
+		&models.AccountMembership{},
+		&models.AuthActionToken{},
+		&models.PersonalAccessToken{},
 		&models.MoodTrackingEvent{},
 		&models.UserNotificationChannel{},
 		&models.UserToken{},

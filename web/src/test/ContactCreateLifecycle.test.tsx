@@ -44,7 +44,7 @@ vi.mock("@/api", () => ({
       contactsList: vi.fn(),
       contactsCreate: vi.fn(),
     },
-    personalize: { personalizeDetail: vi.fn() },
+    personalize: { personalizeDetail2: vi.fn() },
     preferences: { preferencesList: vi.fn() },
     vaultSettings: { settingsDateTypesList: vi.fn() },
     vaults: { vaultsDetail: vi.fn() },
@@ -111,7 +111,7 @@ describe("ContactCreate cache lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.contacts.contactsList).mockResolvedValue({ data: [] });
-    vi.mocked(api.personalize.personalizeDetail).mockResolvedValue({
+    vi.mocked(api.personalize.personalizeDetail2).mockResolvedValue({
       data: [],
     });
     vi.mocked(api.preferences.preferencesList).mockResolvedValue({

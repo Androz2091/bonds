@@ -226,7 +226,7 @@ func (h *VaultFileHandler) handleUpload(c *echo.Context, vaultID, contactID, fil
 	}
 
 	// 检查账户存储配额。limit_bytes=0 表示无限制。
-	accountID := middleware.GetAccountID(c)
+	accountID := middleware.GetVaultAccountID(c)
 	storageInfo, err := h.storageInfoService.Get(accountID)
 	if err == nil && storageInfo.LimitBytes > 0 {
 		if storageInfo.UsedBytes+fileHeader.Size > storageInfo.LimitBytes {

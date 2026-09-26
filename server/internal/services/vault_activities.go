@@ -6,6 +6,7 @@ import (
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type VaultActivityService struct {
@@ -14,6 +15,19 @@ type VaultActivityService struct {
 
 func NewVaultActivityService(db *gorm.DB) *VaultActivityService {
 	return &VaultActivityService{db: db}
+}
+
+func (s *VaultActivityService) InstallLifeMilestones(vaultID, locale string) ([]dto.ActivityCategoryResponse, error) {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		var vault models.Vault
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", vaultID).First(&vault).Error; err != nil {
+			return err
+		}
+		return models.SeedLifeMilestones(tx, vaultID, locale)
+	}); err != nil {
+		return nil, err
+	}
+	return s.ListCategories(vaultID)
 }
 
 func (s *VaultActivityService) ListCategories(vaultID string) ([]dto.ActivityCategoryResponse, error) {

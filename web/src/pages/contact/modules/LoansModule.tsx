@@ -141,9 +141,9 @@ export default function LoansModule({
   });
 
   const { data: enabledCurrencies = [] } = useQuery({
-    queryKey: ["settings", "personalize", "currencies"],
+    queryKey: ["vaults", vaultId, "personalize", "currencies"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("currencies");
+      const res = await api.personalize.personalizeDetail2(String(vaultId), "currencies");
       return (res.data ?? []) as PersonalizeItem[];
     },
   });

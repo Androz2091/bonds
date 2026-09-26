@@ -100,6 +100,15 @@ func main() {
 	}
 	scheduler := cron.NewScheduler(db)
 	scheduler.Start()
+	// Sanitized operator log is bounded: it contains no private content, and
+	// expires after 90 days to avoid unbounded growth and stale identifiers.
+	if err := scheduler.RegisterJob("0 15 2 * * *", "expire_audit_events", func() {
+		if err := db.Where("created_at < ?", time.Now().AddDate(0, 0, -90)).Delete(&models.AuditEvent{}).Error; err != nil {
+			log.Printf("[cron] expire_audit_events error: %v", err)
+		}
+	}); err != nil {
+		log.Printf("WARNING: Failed to register audit retention job: %v", err)
+	}
 
 	mailer := services.NewDynamicMailer(systemSettingService)
 	notificationSender := services.NewShoutrrrSender()

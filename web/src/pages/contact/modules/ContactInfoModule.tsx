@@ -39,9 +39,9 @@ export default function ContactInfoModule({
   const qk = ["vaults", vaultId, "contacts", contactId, "contactInformation"];
 
   const { data: infoTypes = [] } = useQuery<PersonalizeItem[]>({
-    queryKey: ["personalize", "contact-info-types"],
+    queryKey: ["vaults", vaultId, "personalize", "contact-info-types"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("contact-info-types");
+      const res = await api.personalize.personalizeDetail2(String(vaultId), "contact-info-types");
       return res.data ?? [];
     },
   });

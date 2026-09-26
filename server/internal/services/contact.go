@@ -53,12 +53,20 @@ func reloadContactWithSameVaultFirstMetThrough(db *gorm.DB, contact *models.Cont
 }
 
 func (s *ContactService) ListContacts(vaultID, userID string, page, perPage int, search, sort, filter string) ([]dto.ContactResponse, response.Meta, error) {
+	return s.ListContactsWithCompany(vaultID, userID, page, perPage, search, sort, filter, 0)
+}
+
+func (s *ContactService) ListContactsWithCompany(vaultID, userID string, page, perPage int, search, sort, filter string, companyID uint) ([]dto.ContactResponse, response.Meta, error) {
 	formatter, err := newContactNameFormatter(s.db, userID)
 	if err != nil {
 		return nil, response.Meta{}, err
 	}
 
 	query := s.db.Where("vault_id = ?", vaultID)
+	if companyID != 0 {
+		query = query.Where(`EXISTS (SELECT 1 FROM contact_companies cc JOIN companies co ON co.id = cc.company_id
+			WHERE cc.contact_id = contacts.id AND co.vault_id = ? AND co.id = ?)`, vaultID, companyID)
+	}
 	switch filter {
 	case "archived":
 		query = query.Where("listed = ?", false)
@@ -79,7 +87,9 @@ func (s *ContactService) ListContacts(vaultID, userID string, page, perPage int,
 		query = query.Where(
 			s.db.Where("LOWER(first_name) LIKE ?", like).
 				Or("LOWER(last_name) LIKE ?", like).
-				Or("LOWER(nickname) LIKE ?", like),
+				Or("LOWER(nickname) LIKE ?", like).
+				Or(`EXISTS (SELECT 1 FROM contact_companies cc JOIN companies co ON co.id = cc.company_id
+					WHERE cc.contact_id = contacts.id AND co.vault_id = ? AND LOWER(co.name) LIKE ?)`, vaultID, like),
 		)
 	}
 	var total int64

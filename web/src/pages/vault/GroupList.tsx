@@ -49,9 +49,9 @@ export default function GroupList() {
   });
 
   const { data: groupTypes = [] } = useQuery({
-    queryKey: ["settings", "personalize", "group-types"],
+    queryKey: ["vaults", vaultId, "personalize", "group-types"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("group-types");
+      const res = await api.personalize.personalizeDetail2(String(vaultId), "group-types");
       return res.data ?? [];
     },
     enabled: open,

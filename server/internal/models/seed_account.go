@@ -524,6 +524,12 @@ func seedNotificationChannel(tx *gorm.DB, userID, userEmail, locale string) erro
 	return tx.Model(&channel).Update("active", true).Error
 }
 
+// SeedUserNotificationChannel initializes per-user notification preferences
+// when a person joins an existing account or a vault by invitation.
+func SeedUserNotificationChannel(tx *gorm.DB, userID, userEmail, locale string) error {
+	return seedNotificationChannel(tx, userID, userEmail, locale)
+}
+
 func seedAccountCurrencies(tx *gorm.DB, accountID, _ string) error {
 	var currencies []Currency
 	if err := tx.Find(&currencies).Error; err != nil {

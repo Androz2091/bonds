@@ -1,10 +1,12 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/naiba/bonds/internal/config"
@@ -93,7 +95,7 @@ func TestAdminListUsers_Pagination(t *testing.T) {
 	}
 }
 
-func TestAdminListUsers_WithStats(t *testing.T) {
+func TestAdminListUsers_DoesNotExposePrivateUsage(t *testing.T) {
 	adminSvc, authSvc, vaultSvc := setupAdminTest(t)
 
 	resp := registerTestUser(t, authSvc, "stats-user@example.com")
@@ -120,11 +122,14 @@ func TestAdminListUsers_WithStats(t *testing.T) {
 	if len(users) != 1 {
 		t.Fatalf("expected 1 user, got %d", len(users))
 	}
-	if users[0].ContactCount != 2 {
-		t.Errorf("expected contact count 2, got %d", users[0].ContactCount)
+	encoded, err := json.Marshal(users[0])
+	if err != nil {
+		t.Fatal(err)
 	}
-	if users[0].VaultCount != 1 {
-		t.Errorf("expected vault count 1, got %d", users[0].VaultCount)
+	for _, field := range []string{"contact_count", "vault_count", "storage_used"} {
+		if strings.Contains(string(encoded), field) {
+			t.Errorf("admin API exposes private usage field %s", field)
+		}
 	}
 }
 
@@ -500,6 +505,9 @@ func TestAdminDeleteUser_SharedAccount_OnlyDeletesTargetUser(t *testing.T) {
 	if err := adminSvc.db.Create(&invitedUser).Error; err != nil {
 		t.Fatalf("Create invited user failed: %v", err)
 	}
+	if err := adminSvc.db.Create(&models.AccountMembership{AccountID: owner.User.AccountID, UserID: invitedUser.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
 	invitedUserVault := models.UserVault{
 		UserID:     invitedUser.ID,
 		VaultID:    vault.ID,
@@ -562,6 +570,9 @@ func TestAdminDeleteUser_SharedAccountRejectsSoleVaultManager(t *testing.T) {
 	target := models.User{AccountID: owner.User.AccountID, Email: "guard-shared-target@example.com"}
 	if err := adminSvc.db.Create(&target).Error; err != nil {
 		t.Fatalf("create target: %v", err)
+	}
+	if err := adminSvc.db.Create(&models.AccountMembership{AccountID: owner.User.AccountID, UserID: target.ID}).Error; err != nil {
+		t.Fatal(err)
 	}
 	if err := adminSvc.db.Model(&models.UserVault{}).
 		Where("vault_id = ? AND user_id = ?", vault.ID, owner.User.ID).

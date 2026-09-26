@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/naiba/bonds/internal/dto"
+	"github.com/naiba/bonds/internal/models"
 	"github.com/naiba/bonds/internal/testutil"
 )
 
@@ -26,6 +27,47 @@ func setupVaultActivityTest(t *testing.T) (*VaultActivityService, string) {
 		t.Fatalf("CreateVault failed: %v", err)
 	}
 	return NewVaultActivityService(db), vault.ID
+}
+
+func TestInstallLifeMilestonesRestoresOnlyMissingTypesOnExplicitRequest(t *testing.T) {
+	svc, vaultID := setupVaultActivityTest(t)
+	initial, err := svc.ListCategories(vaultID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(initial) != 9 {
+		t.Fatalf("expected 9 categories in new vault, got %d", len(initial))
+	}
+	var total int
+	for _, category := range initial {
+		total += len(category.Types)
+	}
+	if total != 41 {
+		t.Fatalf("expected 41 seeded activity types, got %d", total)
+	}
+	if _, err := svc.InstallLifeMilestones(vaultID, "en"); err != nil {
+		t.Fatal(err)
+	}
+	var deleted models.ActivityType
+	if err := svc.db.Where("label_translation_key = ?", "seed.activity_types.graduated").First(&deleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Delete(&deleted).Error; err != nil {
+		t.Fatal(err)
+	}
+	// The seed is not run automatically on upgraded vaults; the user's explicit
+	// action can restore a type that they previously removed.
+	restored, err := svc.InstallLifeMilestones(vaultID, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restoredCount int
+	for _, category := range restored {
+		restoredCount += len(category.Types)
+	}
+	if restoredCount != 41 || len(restored) != 9 {
+		t.Fatalf("idempotent restoration: types=%d categories=%d", restoredCount, len(restored))
+	}
 }
 
 func TestVaultActivityCategoryCRUD(t *testing.T) {

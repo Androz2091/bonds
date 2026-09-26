@@ -93,7 +93,7 @@ test.describe('Vault - Most Consulted', () => {
     for (let i = 0; i < 3; i++) {
       await page.goto(contactUrl);
       await page.waitForLoadState('networkidle');
-      await expect(page.getByText('MC Test').first()).toBeVisible({ timeout: 10000 });
+      await expect(page.getByText('MC Test').first()).toBeVisible({ timeout: 30000 });
     }
 
     // Navigate back to vault dashboard

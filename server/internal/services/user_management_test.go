@@ -41,6 +41,9 @@ func createTestUser(t *testing.T, db *gorm.DB, accountID, email string) models.U
 	if err := db.Create(&user).Error; err != nil {
 		t.Fatalf("failed to create test user: %v", err)
 	}
+	if err := db.Create(&models.AccountMembership{AccountID: accountID, UserID: user.ID}).Error; err != nil {
+		t.Fatalf("failed to create account membership: %v", err)
+	}
 	return user
 }
 

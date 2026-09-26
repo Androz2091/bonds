@@ -21,6 +21,8 @@ const Login = lazy(() => import("@/pages/auth/Login"));
 const Register = lazy(() => import("@/pages/auth/Register"));
 const VerifyEmail = lazy(() => import("@/pages/auth/VerifyEmail"));
 const TwoFactorVerify = lazy(() => import("@/pages/auth/TwoFactorVerify"));
+const SetPassword = lazy(() => import("@/pages/auth/SetPassword"));
+const ConfirmEmailChange = lazy(() => import("@/pages/auth/ConfirmEmailChange"));
 
 // Vault pages
 const VaultList = lazy(() => import("@/pages/vault/VaultList"));
@@ -139,6 +141,8 @@ export default function App() {
             <Route path="/login/2fa" element={<TwoFactorVerify />} />
             <Route path="/register" element={<Register />} />
             <Route path="/accept-invite" element={<AcceptInvite />} />
+            <Route path="/set-password" element={<SetPassword />} />
+            <Route path="/confirm-email-change" element={<ConfirmEmailChange />} />
             <Route path="/auth/callback" element={<OAuthCallback />} />
             <Route path="/auth/oauth-link" element={<OAuthLink />} />
             <Route path="/verify-email" element={<VerifyEmail />} />

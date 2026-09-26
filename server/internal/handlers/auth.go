@@ -155,7 +155,52 @@ func (h *AuthHandler) Me(c *echo.Context) error {
 		return response.InternalError(c, "err.failed_to_get_user")
 	}
 
+	user.AccountID = middleware.GetAccountID(c)
+	if isAdmin, ok := c.Get("is_admin").(bool); ok {
+		user.IsAdmin = isAdmin
+	}
 	return response.OK(c, user)
+}
+
+// ListAccounts godoc
+//
+//	@Summary	List the current user's account memberships
+//	@Tags	auth
+//	@Security	BearerAuth
+//	@Success	200	{object}	response.APIResponse{data=[]dto.AccountMembershipResponse}
+//	@Router	/auth/accounts [get]
+func (h *AuthHandler) ListAccounts(c *echo.Context) error {
+	accounts, err := h.authService.ListAccounts(middleware.GetUserID(c))
+	if err != nil {
+		return response.InternalError(c, "err.failed_to_get_user")
+	}
+	return response.OK(c, accounts)
+}
+
+// SwitchAccount godoc
+//
+//	@Summary	Switch the current account without changing user credentials
+//	@Tags	auth
+//	@Security	BearerAuth
+//	@Param	request	body	dto.SwitchAccountRequest	true	"Target account"
+//	@Success	200	{object}	response.APIResponse{data=dto.AuthResponse}
+//	@Router	/auth/switch-account [post]
+func (h *AuthHandler) SwitchAccount(c *echo.Context) error {
+	var req dto.SwitchAccountRequest
+	if err := c.Bind(&req); err != nil {
+		return response.BadRequest(c, "err.invalid_request_body", nil)
+	}
+	if err := validateRequest(req); err != nil {
+		return response.ValidationError(c, map[string]string{"validation": err.Error()})
+	}
+	result, err := h.authService.SwitchAccount(middleware.GetUserID(c), req.AccountID)
+	if err != nil {
+		if errors.Is(err, services.ErrUserNotFound) {
+			return response.Forbidden(c, "err.administrator_access_required")
+		}
+		return response.InternalError(c, "err.failed_to_get_user")
+	}
+	return response.OK(c, result)
 }
 
 // VerifyEmail godoc

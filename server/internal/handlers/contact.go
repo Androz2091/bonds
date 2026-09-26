@@ -32,6 +32,7 @@ func NewContactHandler(contactService *services.ContactService) *ContactHandler 
 //	@Param			search		query		string	false	"Search term"
 //	@Param			sort		query		string	false	"Sort order: first_name, last_name, created_at, first_met_at, updated_at (default)"
 //	@Param			filter		query		string	false	"Filter: active (default), archived, all, favorites, needs_verification"
+//	@Param			company_id	query		integer	false	"Filter by company in this vault"
 //	@Success		200			{object}	response.APIResponse{data=[]dto.ContactResponse}
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
@@ -44,8 +45,16 @@ func (h *ContactHandler) List(c *echo.Context) error {
 	search := c.QueryParam("search")
 	sort := c.QueryParam("sort")
 	filter := c.QueryParam("filter")
+	var companyID uint64
+	if raw := c.QueryParam("company_id"); raw != "" {
+		var err error
+		companyID, err = strconv.ParseUint(raw, 10, 64)
+		if err != nil || companyID == 0 {
+			return response.BadRequest(c, "err.invalid_company_id", nil)
+		}
+	}
 
-	contacts, meta, err := h.contactService.ListContacts(vaultID, userID, page, perPage, search, sort, filter)
+	contacts, meta, err := h.contactService.ListContactsWithCompany(vaultID, userID, page, perPage, search, sort, filter, uint(companyID))
 	if err != nil {
 		return response.InternalError(c, "err.failed_to_list_contacts")
 	}

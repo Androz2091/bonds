@@ -49,6 +49,7 @@
     "view_release": "Voir la version"
   },
   "nav": {
+    "accounts": "Changer de compte",
     "vaults": "Coffres",
     "settings": "Paramètres",
     "vault": "Coffre",
@@ -660,6 +661,7 @@
       "sort_first_met": "Première rencontre",
       "sort_updated": "Dernière mise à jour",
       "filter_label": "Filtrer par étiquette",
+      "filter_company": "Filtrer par entreprise",
       "all_labels": "Toutes les étiquettes",
       "filter_group": "Filtrer par groupe",
       "all_groups": "Tous les groupes",
@@ -1463,6 +1465,7 @@
     "invite": "Inviter un utilisateur",
     "email": "Adresse email",
     "permission": "Autorisation",
+    "account_member": "Membre du compte (sans accès aux coffres)",
     "permission.manager": "Gestionnaire",
     "permission.editor": "Éditeur",
     "permission.viewer": "Spectateur",
@@ -1473,7 +1476,30 @@
     "delete": "Annuler l'invitation",
     "deleteConfirm": "Annuler cette invitation ?"
   },
+  "emailChange": {
+    "title": "Confirmer le changement d'adresse e-mail",
+    "confirm": "Confirmer cette adresse",
+    "done": "Confirmation enregistrée. L'adresse changera une fois les anciennes et nouvelles boîtes de réception confirmées. Connectez-vous ensuite avec la nouvelle adresse.",
+    "login": "Se connecter"
+  },
+  "setPassword": {
+    "title": "Définir votre mot de passe",
+    "password": "Nouveau mot de passe",
+    "confirm": "Confirmer le mot de passe",
+    "mismatch": "Les mots de passe ne correspondent pas",
+    "submit": "Enregistrer le mot de passe",
+    "success": "Mot de passe mis à jour. Veuillez vous connecter.",
+    "invalid": "Ce lien est invalide ou a expiré. Demandez-en un nouveau à un administrateur."
+  },
   "acceptInvite": {
+    "vaultScope": "Invitation à un coffre",
+    "accountScope": "Invitation à un compte (sans accès automatique aux coffres)",
+    "invalid": "Cette invitation est invalide ou a expiré.",
+    "signedInAs": "Connecté en tant que {{email}}",
+    "acceptExisting": "Accepter avec ce compte",
+    "switchUser": "Se connecter avec un autre compte",
+    "haveAccount": "Déjà un compte ? Se connecter",
+    "accepted": "Invitation acceptée",
     "title": "Accepter l'invitation",
     "subtitle": "Vous avez été invité à nous rejoindre. Créez votre compte pour commencer.",
     "submit": "Créer un compte",
@@ -1543,6 +1569,11 @@
     "users": "Utilisateurs",
     "default_template": "Modèle par défaut",
     "add_category": "Ajouter une catégorie",
+    "life_presets_title": "Événements de vie",
+    "life_presets_description": "Ajoutez des catégories facultatives au coffre. Les activités existantes restent inchangées.",
+    "life_presets_confirm": "Installer les types manquants ? Les types supprimés précédemment pourraient réapparaître.",
+    "life_presets_install": "Installer les types d'événements",
+    "life_presets_installed": "Types d'événements disponibles",
     "add_type": "Ajouter un type",
     "add_user": "Ajouter un utilisateur",
     "hex_color": "Couleur hexagonale",
@@ -1687,6 +1718,14 @@
     "cron_enabled_label": "Activé"
   },
   "admin": {
+    "audit": {
+      "title": "Journal système et sécurité",
+      "description": "Uniquement les actions administratives et erreurs serveur ; aucun contenu privé ni historique d'accès aux coffres.",
+      "time": "Date",
+      "action": "Opération",
+      "status": "Statut",
+      "request_id": "ID de requête"
+    },
     "tab_users": "Utilisateurs",
     "tab_settings": "Paramètres",
     "tab_backups": "Sauvegardes",
@@ -1726,6 +1765,16 @@
     },
     "users": {
       "title": "Gestion des utilisateurs",
+      "create": "Créer un utilisateur",
+      "create_hint": "Un compte privé sera créé. L'utilisateur choisira son mot de passe grâce à un lien à usage unique. Configurez SMTP au préalable ; aucun accès aux coffres n'est accordé.",
+      "created_email": "Utilisateur créé ; e-mail de création du mot de passe envoyé",
+      "first_name": "Prénom",
+      "last_name": "Nom",
+      "reset_password": "Envoyer un lien de réinitialisation",
+      "reset_sent": "E-mail de réinitialisation envoyé",
+      "edit_identity": "Modifier l'identité",
+      "email_confirmation_hint": "Le changement d'adresse nécessite la confirmation des deux boîtes. Le mot de passe et les accès aux coffres sont conservés.",
+      "email_confirmation_sent": "Liens de confirmation envoyés aux deux adresses",
       "description": "Gérer tous les utilisateurs enregistrés sur cette instance",
       "name": "Nom",
       "email": "E-mail",

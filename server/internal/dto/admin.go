@@ -11,15 +11,39 @@ type AdminUserResponse struct {
 	IsAccountAdministrator  bool      `json:"is_account_administrator" example:"true"`
 	IsInstanceAdministrator bool      `json:"is_instance_administrator" example:"false"`
 	Disabled                bool      `json:"disabled" example:"false"`
-	ContactCount            int64     `json:"contact_count" example:"42"`
-	StorageUsed             int64     `json:"storage_used" example:"10485760"`
-	VaultCount              int64     `json:"vault_count" example:"2"`
 	StorageLimitInMB        int       `json:"storage_limit_in_mb" example:"0"`
 	CreatedAt               time.Time `json:"created_at" example:"2026-01-15T10:30:00Z"`
 }
 
 type AdminToggleUserRequest struct {
 	Disabled *bool `json:"disabled" example:"true"`
+}
+
+type AdminCreateUserRequest struct {
+	Email     string `json:"email" validate:"required,email"`
+	FirstName string `json:"first_name" validate:"required"`
+	LastName  string `json:"last_name"`
+}
+
+type AdminUpdateIdentityRequest struct {
+	FirstName string `json:"first_name" validate:"required"`
+	LastName  string `json:"last_name"`
+}
+
+type AdminRequestEmailChange struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+type AuditEventResponse struct {
+	ID          uint      `json:"id"`
+	ActorUserID *string   `json:"actor_user_id,omitempty"`
+	AccountID   *string   `json:"account_id,omitempty"`
+	VaultID     *string   `json:"vault_id,omitempty"`
+	Method      string    `json:"method"`
+	Route       string    `json:"route"`
+	Status      int       `json:"status"`
+	RequestID   string    `json:"request_id"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type AdminSetAdminRequest struct {

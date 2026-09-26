@@ -19,6 +19,7 @@ type JWTClaims struct {
 	Email            string `json:"email"`
 	IsAdmin          bool   `json:"is_admin"`
 	IsInstanceAdmin  bool   `json:"is_instance_admin"`
+	AuthVersion      uint   `json:"auth_version,omitempty"`
 	TwoFactorPending bool   `json:"two_factor_pending,omitempty"`
 	jwt.RegisteredClaims
 }
@@ -85,7 +86,7 @@ func (m *AuthMiddleware) authenticateWithJWT(c *echo.Context, next echo.HandlerF
 	}
 
 	user := &models.User{}
-	if err := m.db.Select("disabled, email_verified_at, is_account_administrator, is_instance_administrator").Where("id = ?", claims.UserID).First(user).Error; err != nil {
+	if err := m.db.Select("id, account_id, email, disabled, auth_version, email_verified_at, is_account_administrator, is_instance_administrator").Where("id = ?", claims.UserID).First(user).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return response.Unauthorized(c, "err.user_not_found")
 		}
@@ -94,12 +95,22 @@ func (m *AuthMiddleware) authenticateWithJWT(c *echo.Context, next echo.HandlerF
 	if user.Disabled {
 		return response.Forbidden(c, "err.user_account_disabled")
 	}
+	if user.AuthVersion != claims.AuthVersion {
+		return response.Unauthorized(c, "err.invalid_or_expired_token")
+	}
+	admin, ok, err := accountMembershipAdmin(m.db, user, claims.AccountID)
+	if err != nil {
+		return response.InternalError(c, "err.database_error")
+	}
+	if !ok {
+		return response.Unauthorized(c, "err.invalid_or_expired_token")
+	}
 
 	c.Set("user_id", claims.UserID)
 	c.Set("account_id", claims.AccountID)
-	c.Set("email", claims.Email)
+	c.Set("email", user.Email)
 	// Database privileges are authoritative so promotions and revocations take effect before JWT expiry.
-	c.Set("is_admin", user.IsAccountAdministrator)
+	c.Set("is_admin", admin)
 	c.Set("is_instance_admin", user.IsInstanceAdministrator)
 	c.Set("email_verified", user.EmailVerifiedAt != nil)
 	c.Set("claims", claims)
@@ -133,15 +144,22 @@ func (m *AuthMiddleware) authenticateWithPAT(c *echo.Context, next echo.HandlerF
 	if user.Disabled {
 		return response.Forbidden(c, "err.user_account_disabled")
 	}
+	admin, ok, err := accountMembershipAdmin(m.db, &user, pat.AccountID)
+	if err != nil {
+		return response.InternalError(c, "err.database_error")
+	}
+	if !ok {
+		return response.Unauthorized(c, "err.invalid_or_expired_token")
+	}
 
 	now := time.Now()
 
 	m.db.Model(&pat).Update("last_used_at", &now)
 
 	c.Set("user_id", user.ID)
-	c.Set("account_id", user.AccountID)
+	c.Set("account_id", pat.AccountID)
 	c.Set("email", user.Email)
-	c.Set("is_admin", user.IsAccountAdministrator)
+	c.Set("is_admin", admin)
 	c.Set("is_instance_admin", user.IsInstanceAdministrator)
 	c.Set("email_verified", user.EmailVerifiedAt != nil)
 	c.Set("auth_type", "pat")
@@ -149,6 +167,26 @@ func (m *AuthMiddleware) authenticateWithPAT(c *echo.Context, next echo.HandlerF
 	c.Set(ctxIsScopedPAT, strings.TrimSpace(pat.Scopes) != "")
 
 	return next(c)
+}
+
+func accountMembershipAdmin(db *gorm.DB, user *models.User, accountID string) (bool, bool, error) {
+	if accountID == "" {
+		return false, false, nil
+	}
+	var membership models.AccountMembership
+	err := db.Where("account_id = ? AND user_id = ?", accountID, user.ID).First(&membership).Error
+	if err == nil {
+		// Keep the original user's home-account administrator bit authoritative
+		// while old clients and account-management endpoints still use it.
+		if accountID == user.AccountID {
+			return user.IsAccountAdministrator, true, nil
+		}
+		return membership.IsAdmin, true, nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return false, false, err
+	}
+	return false, false, nil
 }
 
 func patHasScope(c *echo.Context, scope string) bool {
@@ -198,6 +236,13 @@ func GetUserID(c *echo.Context) string {
 
 func GetAccountID(c *echo.Context) string {
 	id, _ := c.Get("account_id").(string)
+	return id
+}
+
+// GetVaultAccountID is only valid after the vault permission middleware.
+// A cross-account vault invitation never grants access to account settings.
+func GetVaultAccountID(c *echo.Context) string {
+	id, _ := c.Get("vault_account_id").(string)
 	return id
 }
 

@@ -471,7 +471,7 @@ function GenderPronounSelect({
   const { data: items = [], isLoading } = useQuery<PersonalizeItem[]>({
     queryKey: ["vaults", vaultId, "personalize", entity],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail(entity);
+      const res = await api.personalize.personalizeDetail2(String(vaultId), entity);
       return res.data ?? [];
     },
   });

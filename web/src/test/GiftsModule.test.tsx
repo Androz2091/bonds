@@ -24,7 +24,7 @@ vi.mock("@/api", () => ({
       contactsGiftsDelete: vi.fn(),
     },
     personalize: {
-      personalizeDetail: vi.fn(),
+      personalizeDetail2: vi.fn(),
     },
   },
 }));
@@ -71,8 +71,8 @@ function setupGiftApi(gifts = defaultGifts) {
     data: updatedGift,
   });
   vi.mocked(api.gifts.contactsGiftsDelete).mockResolvedValue(undefined);
-  vi.mocked(api.personalize.personalizeDetail).mockImplementation(
-    async (entity: string) => {
+  vi.mocked(api.personalize.personalizeDetail2).mockImplementation(
+    async (_vaultId: string, entity: string) => {
       if (entity === "gift-occasions") {
         return {
           data: [

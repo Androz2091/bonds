@@ -92,14 +92,14 @@ test.describe('Admin Features', () => {
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
     await expect(page.getByText('User Management')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('admin menu is visible in user dropdown', async ({ page }) => {
     await loginUser(page, adminEmail!);
 
     await expect(page.locator('.ant-avatar')).toBeVisible({ timeout: 5000 });
-    await page.locator('.ant-avatar').click();
+    await page.locator('.ant-layout-header .ant-dropdown-trigger').hover();
     await expect(page.getByText('Administration')).toBeVisible({ timeout: 5000 });
   });
 
@@ -108,8 +108,8 @@ test.describe('Admin Features', () => {
 
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('table').getByText(adminEmail)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first().getByText(adminEmail)).toBeVisible({ timeout: 10000 });
   });
 
   test('non-admin should not see admin menu', async ({ page }) => {
@@ -118,7 +118,7 @@ test.describe('Admin Features', () => {
     await registerUser(page, userEmail);
 
     // Open user dropdown
-    await page.locator('.ant-avatar').click();
+    await page.locator('.ant-layout-header .ant-dropdown-trigger').hover();
     // "Administration" should NOT appear for non-admin
     await expect(page.getByText('Administration')).not.toBeVisible({ timeout: 3000 });
   });
@@ -197,7 +197,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: secondUserEmail });
     await expect(row).toBeVisible({ timeout: 5000 });
@@ -212,7 +212,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: secondUserEmail });
     await expect(row.locator('.ant-tag').filter({ hasText: 'Disabled' })).toBeVisible({ timeout: 5000 });
@@ -226,7 +226,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: secondUserEmail });
     await expect(row.locator('.ant-tag').filter({ hasText: 'User' })).toBeVisible({ timeout: 5000 });
@@ -240,7 +240,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: secondUserEmail });
     await expect(row.locator('.ant-tag').filter({ hasText: 'Admin' })).toBeVisible({ timeout: 5000 });
@@ -254,7 +254,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const selfRow = page.getByRole('row').filter({ hasText: adminEmail });
     await expect(selfRow).toBeVisible({ timeout: 5000 });
@@ -269,7 +269,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: throwawayEmail });
     await expect(row).toBeVisible({ timeout: 5000 });
@@ -281,7 +281,7 @@ test.describe('Admin Features', () => {
     await popconfirm.getByRole('button', { name: 'OK' }).click();
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByRole('table').getByText(throwawayEmail)).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first().getByText(throwawayEmail)).not.toBeVisible({ timeout: 10000 });
   });
 
   test('admin can save and persist settings', async ({ page }) => {
@@ -440,7 +440,7 @@ test.describe('Admin Features', () => {
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByRole('table').getByText(adminEmail)).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first().getByText(adminEmail)).not.toBeVisible({ timeout: 10000 });
   });
 
   test('non-admin user cannot access admin settings page', async ({ page }) => {

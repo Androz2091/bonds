@@ -61,27 +61,18 @@ func TestFavoriteOrderClauseStringIsPostgresCompatible(t *testing.T) {
 	}
 }
 
-func TestAdminContactCountRawSQLIsPostgresCompatible(t *testing.T) {
+func TestAdminListUsersPostgresCompatible(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	cfg := testutil.TestJWTConfig()
 	authSvc := NewAuthService(db, cfg)
 	adminSvc := NewAdminService(db, t.TempDir())
 
-	resp, err := authSvc.Register(dto.RegisterRequest{
+	_, err := authSvc.Register(dto.RegisterRequest{
 		FirstName: "Test", LastName: "User",
 		Email: "pg-admin@example.com", Password: "password123",
 	}, "en")
 	if err != nil {
 		t.Fatalf("Register failed: %v", err)
-	}
-
-	dryDB := db.Session(&gorm.Session{DryRun: true})
-	var contactCount int64
-	stmt := dryDB.Raw(adminContactCountSQL(), resp.User.AccountID, false, false).Scan(&contactCount).Statement
-
-	sql := strings.ToLower(stmt.SQL.String())
-	if strings.Contains(sql, "can_be_deleted = 0") || strings.Contains(sql, "listed = 0") {
-		t.Errorf("admin contact-count SQL compares boolean against integer literal; SQL: %s", sql)
 	}
 
 	if _, _, err := adminSvc.ListUsers(0, 0); err != nil {

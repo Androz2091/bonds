@@ -104,6 +104,9 @@ func (h *UserManagementHandler) Delete(c *echo.Context) error {
 		if errors.Is(err, services.ErrLastVaultManager) {
 			return response.Conflict(c, "err.last_vault_manager")
 		}
+		if errors.Is(err, services.ErrAccountHasExternalVaultMembers) {
+			return response.Conflict(c, "err.account_has_external_vault_members")
+		}
 		return response.InternalError(c, "err.failed_to_delete_user")
 	}
 	return response.NoContent(c)

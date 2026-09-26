@@ -105,7 +105,7 @@ vi.mock("@/api", () => ({
       preferencesList: vi.fn(),
     },
     personalize: {
-      personalizeDetail: vi.fn(),
+      personalizeDetail2: vi.fn(),
     },
   },
   httpClient: {
@@ -153,7 +153,7 @@ describe("ContactEdit Validation", () => {
     vi.mocked(api.contacts.contactsUpdate).mockResolvedValue({
       data: { id: "c1" },
     });
-    vi.mocked(api.personalize.personalizeDetail).mockResolvedValue({
+    vi.mocked(api.personalize.personalizeDetail2).mockResolvedValue({
       data: [],
     });
     vi.mocked(api.vaults.vaultsList).mockResolvedValue({ data: [] });

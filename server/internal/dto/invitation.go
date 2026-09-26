@@ -3,8 +3,19 @@ package dto
 import "time"
 
 type CreateInvitationRequest struct {
-	Email      string `json:"email" validate:"required" example:"user@example.com"`
-	Permission int    `json:"permission" validate:"required,oneof=100 200 300" example:"100"`
+	Email string `json:"email" validate:"required" example:"user@example.com"`
+	// Deprecated: accepted for older clients, but account invitations do not
+	// grant vault permissions. Only Vault invitations apply this field.
+	Permission int `json:"permission" validate:"omitempty,oneof=100 200 300" example:"300"`
+}
+
+type CreateVaultInvitationRequest struct {
+	Email      string `json:"email" validate:"required,email" example:"user@example.com"`
+	Permission int    `json:"permission" validate:"required,oneof=100 200 300" example:"300"`
+}
+
+type AcceptExistingInvitationRequest struct {
+	Token string `json:"token" validate:"required"`
 }
 
 type AcceptInvitationRequest struct {
@@ -17,6 +28,7 @@ type AcceptInvitationRequest struct {
 type InvitationResponse struct {
 	ID         uint       `json:"id" example:"1"`
 	Email      string     `json:"email" example:"user@example.com"`
+	VaultID    *string    `json:"vault_id,omitempty"`
 	Permission int        `json:"permission" example:"100"`
 	ExpiresAt  time.Time  `json:"expires_at" example:"2026-01-15T10:30:00Z"`
 	AcceptedAt *time.Time `json:"accepted_at" example:"2026-01-15T10:30:00Z"`

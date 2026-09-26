@@ -4,6 +4,8 @@ func AllModels() []interface{} {
 	return []interface{}{
 		&Account{},
 		&User{},
+		&AccountMembership{},
+		&AuthActionToken{},
 		&Vault{},
 		&Contact{},
 		&UserVault{},
@@ -90,6 +92,7 @@ func AllModels() []interface{} {
 		&DavSyncLog{},
 		&Cron{},
 		&Log{},
+		&AuditEvent{},
 
 		&RelationshipGroupType{},
 		&RelationshipType{},

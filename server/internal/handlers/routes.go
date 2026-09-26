@@ -20,7 +20,8 @@ import (
 	_ "github.com/naiba/bonds/docs"
 )
 
-func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version string, backupReloader func()) {
+func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version string, backupReloader func(), mailerOverride ...services.Mailer) {
+	e.Use(middleware.Audit(db))
 	authMiddleware := middleware.NewAuthMiddleware(cfg.JWT.Secret, db)
 
 	systemSettingService := services.NewSystemSettingServiceWithCipher(db, cfg.Security.SettingsEncKey)
@@ -110,6 +111,9 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	patService := services.NewPersonalAccessTokenService(db)
 
 	mailer := services.NewDynamicMailer(systemSettingService)
+	if len(mailerOverride) > 0 && mailerOverride[0] != nil {
+		mailer = mailerOverride[0]
+	}
 	authService.SetMailer(mailer)
 	authService.SetSystemSettings(systemSettingService)
 	invitationService := services.NewInvitationService(db, mailer, cfg.App.URL)
@@ -263,6 +267,9 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	currencyHandler := NewCurrencyHandler(currencyService)
 	davClientHandler := NewDavClientHandler(davClientService, davSyncService)
 	adminHandler := NewAdminHandler(adminService, systemSettingService, searchService, db)
+	credentialActions := services.NewCredentialActionService(db, mailer, cfg.App.URL, systemSettingService)
+	adminService.SetCredentialActions(credentialActions)
+	credentialHandler := NewCredentialActionHandler(credentialActions)
 	adminHandler.RegisterReloader(func() {
 		if err := geocodingManager.Reload(); err != nil {
 			log.Printf("WARNING: geocoding reload failed: %v", err)
@@ -326,6 +333,8 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	auth.POST("/login", authHandler.Login)
 	auth.POST("/refresh", authHandler.Refresh, authMiddleware.Authenticate)
 	auth.GET("/me", authHandler.Me, authMiddleware.Authenticate)
+	auth.GET("/accounts", authHandler.ListAccounts, authMiddleware.Authenticate)
+	auth.POST("/switch-account", authHandler.SwitchAccount, authMiddleware.Authenticate)
 	auth.GET("/providers", oauthHandler.AvailableProviders)
 	auth.POST("/oauth/link", oauthHandler.LinkProvider, authMiddleware.Authenticate)
 	auth.POST("/oauth/link-register", oauthHandler.LinkRegister)
@@ -334,6 +343,8 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 
 	webauthnHandler := NewWebAuthnHandler(webauthnService, authService)
 	auth.POST("/verify-email", authHandler.VerifyEmail)
+	auth.POST("/set-password", credentialHandler.Complete)
+	auth.POST("/confirm-email-change", credentialHandler.ConfirmEmailChange)
 	auth.POST("/resend-verification", authHandler.ResendVerification, authMiddleware.Authenticate)
 
 	auth.POST("/webauthn/login/begin", webauthnHandler.BeginLogin)
@@ -341,6 +352,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	auth.POST("/2fa/verify", authHandler.VerifyTwoFactor)
 
 	api.POST("/invitations/accept", invitationHandler.Accept)
+	api.GET("/invitations/:token", invitationHandler.Preview)
 
 	api.GET("/instance/info", instanceHandler.GetInfo)
 
@@ -353,6 +365,11 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 
 	adminGroup := api.Group("/admin", authMiddleware.Authenticate, middleware.RequireEmailVerification(emailVerificationRequired), middleware.DenyScopedPAT, authMiddleware.RequireInstanceAdmin)
 	adminGroup.GET("/users", adminHandler.ListUsers)
+	adminGroup.POST("/users", adminHandler.CreateUser)
+	adminGroup.POST("/users/:id/reset-password", adminHandler.ResetUserPassword)
+	adminGroup.PUT("/users/:id/identity", adminHandler.UpdateIdentity)
+	adminGroup.POST("/users/:id/email-change", adminHandler.RequestEmailChange)
+	adminGroup.GET("/audit", adminHandler.ListAudit)
 	adminGroup.PUT("/users/:id/toggle", adminHandler.ToggleUser)
 	adminGroup.PUT("/users/:id/admin", adminHandler.SetAdmin)
 	adminGroup.DELETE("/users/:id", adminHandler.DeleteUser)
@@ -373,11 +390,13 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	backupGroup.GET("", backupHandler.List)
 	backupGroup.POST("", backupHandler.Create)
 	backupGroup.GET("/config", backupHandler.GetConfig)
-	backupGroup.GET("/:filename/download", backupHandler.Download)
+	// A raw backup contains every user's private data; never serve it to an
+	// in-app administrator. Operators can retrieve it via trusted host access.
 	backupGroup.DELETE("/:filename", backupHandler.Delete)
 	backupGroup.POST("/:filename/restore", backupHandler.Restore)
 
 	protected := api.Group("", authMiddleware.Authenticate, middleware.RequireEmailVerification(emailVerificationRequired), middleware.DenyScopedPAT)
+	protected.POST("/invitations/accept-existing", invitationHandler.AcceptExisting)
 
 	protected.GET("/account", accountHandler.GetAccount)
 
@@ -541,6 +560,9 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	quickFactRoutes.DELETE("/:templateId/:id", quickFactHandler.Delete, requireEditor)
 
 	vaultScoped := protected.Group("/vaults/:vault_id", VaultPermissionMiddleware(vaultService, models.PermissionViewer))
+	vaultScoped.GET("/personalize/:entity", personalizeHandler.ListForVault)
+	vaultScoped.GET("/relationship-types", relationshipTypeHandler.ListAllForVault)
+	vaultScoped.GET("/call-reason-types/:id/reasons", callReasonHandler.ListForVault)
 	contactLayouts := vaultScoped.Group("/contact-layout")
 	contactLayouts.GET("/modules", contactLayoutHandler.Modules)
 	contactLayouts.GET("/templates", contactLayoutHandler.List)
@@ -815,7 +837,12 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	vaultSettings.PUT("/visibility", vaultSettingsHandler.UpdateVisibility)
 
 	vaultSettings.GET("/users", vaultSettingsHandler.ListUsers)
-	vaultSettings.POST("/users", vaultSettingsHandler.AddUser)
+	vaultSettings.GET("/invitations", invitationHandler.ListVault)
+	vaultSettings.GET("/audit", adminHandler.ListVaultAudit)
+	vaultSettings.POST("/invitations", invitationHandler.CreateVault)
+	vaultSettings.DELETE("/invitations/:id", invitationHandler.DeleteVault)
+	// Membership changes require the recipient to accept a scoped invitation.
+	// The legacy direct-add endpoint bypassed consent and could enumerate users.
 	vaultSettings.PUT("/users/:id", vaultSettingsHandler.UpdateUserPermission)
 	vaultSettings.DELETE("/users/:id", vaultSettingsHandler.RemoveUser)
 
@@ -841,6 +868,7 @@ func RegisterRoutes(e *echo.Echo, db *gorm.DB, cfg *config.Config, version strin
 	vaultSettings.DELETE("/moodParams/:id", vaultSettingsHandler.DeleteMoodParam)
 
 	vaultSettings.GET("/activityCategories", vaultSettingsHandler.ListActivityCategories)
+	vaultSettings.POST("/activity-presets/life-milestones", vaultSettingsHandler.InstallLifeMilestones)
 	vaultSettings.POST("/activityCategories", vaultSettingsHandler.CreateActivityCategory)
 	vaultSettings.PUT("/activityCategories/:id", vaultSettingsHandler.UpdateActivityCategory)
 	vaultSettings.POST("/activityCategories/:id/position", vaultSettingsHandler.UpdateActivityCategoryOrder)

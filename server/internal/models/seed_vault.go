@@ -12,11 +12,66 @@ func SeedVaultDefaults(tx *gorm.DB, vaultID, locale string) error {
 		seedMoodTrackingParameters,
 		seedActivityCategoriesAndTypes,
 		seedInteractionActivityTypes,
+		SeedLifeMilestones,
 		seedVaultQuickFactsTemplates,
 	}
 	for _, fn := range seeders {
 		if err := fn(tx, vaultID, locale); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// Life milestones are Activity types, not a second event domain. Installing
+// the presets is explicitly opt-in for existing vaults so customized or
+// previously deleted defaults are never silently recreated during upgrades.
+func SeedLifeMilestones(tx *gorm.DB, vaultID, locale string) error {
+	groups := []struct {
+		key   string
+		types []string
+	}{
+		{"seed.activity_categories.relationships", []string{
+			"started_dating", "engaged", "married", "separated", "divorced", "reconciled",
+		}},
+		{"seed.activity_categories.family", []string{
+			"became_parent", "adopted_child", "became_grandparent", "welcomed_family_member",
+		}},
+		{"seed.activity_categories.education", []string{
+			"started_school", "graduated", "earned_degree",
+		}},
+		{"seed.activity_categories.home_and_health", []string{
+			"moved_home", "bought_home", "renovated_home", "had_surgery", "recovered_from_illness",
+		}},
+	}
+	for groupIndex, group := range groups {
+		var category ActivityCategory
+		err := tx.Where("vault_id = ? AND label_translation_key = ?", vaultID, group.key).First(&category).Error
+		if err != nil {
+			if err != gorm.ErrRecordNotFound {
+				return err
+			}
+			position := groupIndex + 6
+			category = ActivityCategory{VaultID: vaultID, Label: strPtr(i18n.T(locale, group.key)),
+				LabelTranslationKey: strPtr(group.key), Position: &position, CanBeDeleted: true}
+			if err := tx.Create(&category).Error; err != nil {
+				return err
+			}
+		}
+		for index, name := range group.types {
+			key := "seed.activity_types." + name
+			var count int64
+			if err := tx.Model(&ActivityType{}).Where("activity_category_id = ? AND label_translation_key = ?", category.ID, key).Count(&count).Error; err != nil {
+				return err
+			}
+			if count != 0 {
+				continue
+			}
+			position := index + 1
+			if err := tx.Create(&ActivityType{ActivityCategoryID: category.ID, Label: strPtr(i18n.T(locale, key)),
+				LabelTranslationKey: strPtr(key), Position: &position, CanBeDeleted: true}).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil

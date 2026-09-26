@@ -18,6 +18,10 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api } from "@/api";
 import type { Company, ContactJob } from "@/api";
+import {
+  matchesCompanyName,
+  normalizedCompanyName,
+} from "@/utils/companyMatch";
 
 const { Text, Title } = Typography;
 
@@ -91,8 +95,8 @@ export default function JobsModule({ vaultId, contactId }: JobsModuleProps) {
     const companyName = values.company_name.trim();
     const existing = companies.find(
       (company) =>
-        company.name?.trim().toLocaleLowerCase() ===
-        companyName.toLocaleLowerCase(),
+        normalizedCompanyName(company.name ?? "") ===
+        normalizedCompanyName(companyName),
     );
     if (existing?.id != null) {
       return { company_id: existing.id, job_position: values.job_position };
@@ -190,7 +194,11 @@ export default function JobsModule({ vaultId, contactId }: JobsModuleProps) {
                 }}
               >
                 <span>
-                  <Text strong>{companyName}</Text>
+                  <Link
+                    to={`/vaults/${vaultId}/contacts?company=${job.company_id}`}
+                  >
+                    <Text strong>{companyName}</Text>
+                  </Link>
                   <Text type="secondary" style={{ display: "block" }}>
                     {job.job_position || "—"}
                   </Text>
@@ -264,9 +272,7 @@ export default function JobsModule({ vaultId, contactId }: JobsModuleProps) {
             <AutoComplete
               allowClear
               filterOption={(inputValue, option) =>
-                String(option?.label ?? "")
-                  .toLocaleLowerCase()
-                  .includes(inputValue.toLocaleLowerCase())
+                matchesCompanyName(inputValue, String(option?.label ?? ""))
               }
               options={companies.map((company) => ({
                 label: company.name,

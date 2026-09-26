@@ -159,7 +159,7 @@ func setupTestServerWithConfig(t *testing.T, configure func(*config.Config)) *te
 		t.Fatalf("failed to seed settings: %v", err)
 	}
 	e := echo.New()
-	handlers.RegisterRoutes(e, db, cfg, "test", nil)
+	handlers.RegisterRoutes(e, db, cfg, "test", nil, &services.NoopMailer{})
 	return &testServer{e: e, db: db, cfg: cfg}
 }
 
@@ -3077,7 +3077,7 @@ func setupTestServerWithStorage(t *testing.T) *testServer {
 		t.Fatalf("failed to seed settings: %v", err)
 	}
 	e := echo.New()
-	handlers.RegisterRoutes(e, db, cfg, "test", nil)
+	handlers.RegisterRoutes(e, db, cfg, "test", nil, &services.NoopMailer{})
 	return &testServer{e: e, db: db, cfg: cfg}
 }
 

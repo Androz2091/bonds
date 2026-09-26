@@ -45,12 +45,13 @@ import SearchBar from "@/components/SearchBar";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api";
+import type { GithubComNaibaBondsInternalDtoAccountMembershipResponse as AccountMembership } from "@/api/generated/data-contracts";
 import { usePreferencesSync } from "@/hooks/usePreferencesSync";
 
 const { Header, Content } = AntLayout;
 
 export default function Layout() {
-  const { user, logout } = useAuth();
+  const { user, logout, setExternalToken } = useAuth();
   const queryClient = useQueryClient();
   // Apply the user's saved UI language to i18next so reloading the page
   // doesn't drop you back into browser-detected English.
@@ -89,6 +90,11 @@ export default function Layout() {
     queryKey: ["instance", "info"],
     queryFn: async () => (await api.instance.infoList()).data,
     staleTime: 6 * 60 * 60 * 1000,
+  });
+  const { data: accounts } = useQuery({
+    queryKey: ["auth", "accounts", user?.id],
+    queryFn: async (): Promise<AccountMembership[]> => (await api.auth.accountsList()).data ?? [],
+    enabled: !!user,
   });
 
   // Grouped nav: Core | Content | Management | Activity
@@ -133,6 +139,15 @@ export default function Layout() {
     .find((item) => location.pathname.startsWith(item.key))?.key ?? "";
 
   const userMenuItems: MenuProps["items"] = [
+    ...(accounts && accounts.length > 1
+      ? [
+          { type: "group" as const, label: t("nav.accounts"), children: accounts.filter((membership) => !!membership.account_id).map((membership) => ({
+            key: `account:${membership.account_id}`,
+            label: `${t("nav.account")} · ${membership.account_id?.slice(0, 8)}${membership.account_id === user?.account_id ? " ✓" : ""}`,
+          })) },
+          { type: "divider" as const },
+        ]
+      : []),
     { key: "/settings", icon: <SettingOutlined />, label: t("nav.account") },
     { key: "/settings/preferences", icon: <ControlOutlined />, label: t("nav.preferences") },
     { key: "/settings/notifications", icon: <BellOutlined />, label: t("nav.notifications") },
@@ -233,10 +248,22 @@ export default function Layout() {
             <Dropdown
               menu={{
                 items: userMenuItems,
-                onClick: ({ key }) => {
+                onClick: async ({ key }) => {
                   if (key === "logout") {
                     logout();
                     navigate("/login");
+                  } else if (key.startsWith("account:")) {
+                    const accountID = key.slice("account:".length);
+                    if (accountID === user?.account_id) return;
+                    try {
+                      const response = await api.auth.switchAccountCreate({ account_id: accountID });
+                      if (response.data?.token) {
+                        setExternalToken(response.data.token);
+                        navigate("/vaults");
+                      }
+                    } catch {
+                      navigate("/vaults");
+                    }
                   } else {
                     navigate(key);
                   }

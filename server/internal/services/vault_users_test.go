@@ -47,6 +47,9 @@ func registerSameAccountUser(t *testing.T, authSvc *AuthService, accountID, emai
 		Update("account_id", accountID).Error; err != nil {
 		t.Fatalf("Failed to reassign account: %v", err)
 	}
+	if err := authSvc.db.Create(&models.AccountMembership{AccountID: accountID, UserID: resp.User.ID}).Error; err != nil {
+		t.Fatalf("Failed to add account membership: %v", err)
+	}
 }
 
 func TestVaultUsersListInitial(t *testing.T) {

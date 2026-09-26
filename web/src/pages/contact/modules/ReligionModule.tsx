@@ -33,7 +33,7 @@ export default function ReligionModule({
   const { data: religions = [] } = useQuery<PersonalizeItem[]>({
     queryKey: ["vaults", vaultId, "personalize", "religions"],
     queryFn: async () =>
-      (await api.personalize.personalizeDetail("religions")).data ?? [],
+      (await api.personalize.personalizeDetail2(String(vaultId), "religions")).data ?? [],
   });
 
   const mutation = useMutation({

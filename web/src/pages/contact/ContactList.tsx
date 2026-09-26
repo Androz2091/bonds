@@ -31,6 +31,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api";
 import type {
   APIError,
+  Company,
   Contact,
   Group,
   PaginationMeta,
@@ -127,6 +128,7 @@ export default function ContactList() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const vaultId = id!;
+  const companyFilter = parsePositiveInteger(searchParams.get("company"));
   const [search, setSearch] = useState("");
   const [sortOverride, setSortOverride] = useState<string | null>(null);
   const [labelFilter, setLabelFilter] = useState<number | null>(
@@ -177,6 +179,10 @@ export default function ContactList() {
     queryFn: async () =>
       (await api.groups.groupsList(String(vaultId))).data ?? [],
   });
+  const { data: companies = [] } = useQuery({
+    queryKey: ["vaults", vaultId, "companies"],
+    queryFn: async (): Promise<Company[]> => (await api.companies.companiesList(String(vaultId))).data ?? [],
+  });
 
   const { data: vaults = [] } = useQuery<Vault[]>({
     queryKey: ["vaults", "bulkMoveTargets"],
@@ -191,6 +197,7 @@ export default function ContactList() {
       "contacts",
       labelFilter,
       groupFilter,
+      companyFilter,
       currentPage,
       pageSize,
       sortBy,
@@ -198,7 +205,7 @@ export default function ContactList() {
       statusFilter,
     ],
     queryFn: async () => {
-      if (labelFilter) {
+      if (labelFilter && !companyFilter) {
         const res = await api.contacts.contactsLabelsDetail(
           String(vaultId),
           labelFilter,
@@ -214,7 +221,7 @@ export default function ContactList() {
           meta: res.meta as PaginationMeta | undefined,
         };
       }
-      if (groupFilter) {
+      if (groupFilter && !companyFilter) {
         const res = await api.contacts.contactsList(String(vaultId), {
           per_page: 9999,
           sort: SORT_MAP[sortBy] ?? "updated_at",
@@ -238,6 +245,7 @@ export default function ContactList() {
         per_page: pageSize,
         sort: SORT_MAP[sortBy] ?? "updated_at",
         filter: statusFilter,
+        ...(companyFilter ? { company_id: companyFilter } : {}),
         ...(search.length > 2 ? { search } : {}),
       });
       return {
@@ -280,6 +288,7 @@ export default function ContactList() {
 
   const applyTagFilter = (kind: "label" | "group", value: number | null) => {
     const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete("company");
     nextParams.delete("label");
     nextParams.delete("group");
     if (kind === "label") {
@@ -779,6 +788,27 @@ export default function ContactList() {
             {t("contact.list.columns")}
           </Button>
         </Popover>
+        <Select
+          data-testid="contact-company-filter"
+          placeholder={t("contact.list.filter_company")}
+          value={companyFilter}
+          options={companies.map((company) => ({ label: company.name, value: company.id }))}
+          onChange={(value) => {
+            const next = new URLSearchParams(searchParams);
+            next.delete("label");
+            next.delete("group");
+            setLabelFilter(null);
+            setGroupFilter(null);
+            if (value) next.set("company", String(value));
+            else next.delete("company");
+            next.delete("page");
+            setSearchParams(next);
+          }}
+          style={{ width: 200 }}
+          allowClear
+          showSearch
+          optionFilterProp="label"
+        />
         <Select
           data-testid="contact-label-filter"
           placeholder={t("contact.list.filter_label")}

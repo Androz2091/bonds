@@ -34,6 +34,23 @@ func NewPersonalizeHandler(personalizeService *services.PersonalizeService) *Per
 //	@Router			/settings/personalize/{entity} [get]
 func (h *PersonalizeHandler) List(c *echo.Context) error {
 	accountID := middleware.GetAccountID(c)
+	return h.listForAccount(c, accountID)
+}
+
+// ListForVault godoc
+//
+// @Summary List reference values belonging to an accessible vault's account
+// @Tags personalize
+// @Security BearerAuth
+// @Param vault_id path string true "Vault ID"
+// @Param entity path string true "Entity type"
+// @Success 200 {object} response.APIResponse
+// @Router /vaults/{vault_id}/personalize/{entity} [get]
+func (h *PersonalizeHandler) ListForVault(c *echo.Context) error {
+	return h.listForAccount(c, middleware.GetVaultAccountID(c))
+}
+
+func (h *PersonalizeHandler) listForAccount(c *echo.Context, accountID string) error {
 	entity := c.Param("entity")
 
 	items, err := h.personalizeService.List(accountID, entity)

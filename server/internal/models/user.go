@@ -8,20 +8,23 @@ import (
 )
 
 type User struct {
-	ID                        string     `json:"id" gorm:"primaryKey;type:text"`
-	AccountID                 string     `json:"account_id" gorm:"type:text;not null;index"`
-	FirstName                 *string    `json:"first_name"`
-	LastName                  *string    `json:"last_name"`
-	Email                     string     `json:"email" gorm:"uniqueIndex;not null"`
-	EmailVerifiedAt           *time.Time `json:"email_verified_at"`
-	EmailVerificationToken    *string    `json:"-" gorm:"type:text"`
-	Password                  *string    `json:"-"`
-	TwoFactorSecret           *string    `json:"-"`
-	TwoFactorRecoveryCodes    *string    `json:"-"`
-	TwoFactorConfirmedAt      *time.Time `json:"two_factor_confirmed_at"`
-	IsAccountAdministrator    bool       `json:"is_account_administrator" gorm:"default:false"`
-	IsInstanceAdministrator   bool       `json:"is_instance_administrator" gorm:"default:false"`
-	Disabled                  bool       `json:"disabled" gorm:"default:false"`
+	ID                      string     `json:"id" gorm:"primaryKey;type:text"`
+	AccountID               string     `json:"account_id" gorm:"type:text;not null;index"`
+	FirstName               *string    `json:"first_name"`
+	LastName                *string    `json:"last_name"`
+	Email                   string     `json:"email" gorm:"uniqueIndex;not null"`
+	EmailVerifiedAt         *time.Time `json:"email_verified_at"`
+	EmailVerificationToken  *string    `json:"-" gorm:"type:text"`
+	Password                *string    `json:"-"`
+	TwoFactorSecret         *string    `json:"-"`
+	TwoFactorRecoveryCodes  *string    `json:"-"`
+	TwoFactorConfirmedAt    *time.Time `json:"two_factor_confirmed_at"`
+	IsAccountAdministrator  bool       `json:"is_account_administrator" gorm:"default:false"`
+	IsInstanceAdministrator bool       `json:"is_instance_administrator" gorm:"default:false"`
+	Disabled                bool       `json:"disabled" gorm:"default:false"`
+	// Incrementing AuthVersion revokes previously issued JWTs without changing
+	// memberships. PATs must be revoked separately when credentials are reset.
+	AuthVersion               uint       `json:"-" gorm:"not null;default:0"`
 	HelpShown                 bool       `json:"help_shown" gorm:"default:true"`
 	InvitationCode            *string    `json:"invitation_code"`
 	InvitationAcceptedAt      *time.Time `json:"invitation_accepted_at"`

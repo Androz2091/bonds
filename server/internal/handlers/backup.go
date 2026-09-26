@@ -87,7 +87,8 @@ func (h *BackupHandler) GetConfig(c *echo.Context) error {
 //	@Failure		400	{object}	response.APIResponse
 //	@Failure		401	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/admin/backups/{filename}/download [get]
+//
+// Deprecated: backups are not downloadable through the administrator API.
 func (h *BackupHandler) Download(c *echo.Context) error {
 	filename := c.Param("filename")
 	fullPath, err := h.backupService.GetFilePath(filename)

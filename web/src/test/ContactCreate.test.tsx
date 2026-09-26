@@ -86,7 +86,7 @@ vi.mock("@/api", () => ({
       contactsCreate: vi.fn(),
     },
     personalize: {
-      personalizeDetail: vi.fn(),
+      personalizeDetail2: vi.fn(),
     },
     preferences: {
       preferencesList: vi.fn(),
@@ -123,7 +123,7 @@ describe("ContactCreate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.contacts.contactsList).mockResolvedValue({ data: [] });
-    vi.mocked(api.personalize.personalizeDetail).mockResolvedValue({
+    vi.mocked(api.personalize.personalizeDetail2).mockResolvedValue({
       data: [],
     });
     vi.mocked(api.preferences.preferencesList).mockResolvedValue({
@@ -222,8 +222,8 @@ describe("ContactCreate", () => {
     vi.mocked(api.contacts.contactsCreate).mockResolvedValue({
       data: { id: "c1" },
     });
-    vi.mocked(api.personalize.personalizeDetail).mockImplementation(
-      async (entity: string) => ({
+    vi.mocked(api.personalize.personalizeDetail2).mockImplementation(
+      async (_vaultId: string, entity: string) => ({
         data:
           entity === "genders"
             ? [{ id: 7, label: "Non-binary" }]

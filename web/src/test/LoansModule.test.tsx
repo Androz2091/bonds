@@ -25,7 +25,7 @@ vi.mock("@/api", () => ({
       contactsLoansDelete: vi.fn(),
     },
     currencies: { currenciesList: vi.fn() },
-    personalize: { personalizeDetail: vi.fn() },
+    personalize: { personalizeDetail2: vi.fn() },
   },
 }));
 

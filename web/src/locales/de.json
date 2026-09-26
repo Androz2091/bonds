@@ -49,6 +49,7 @@
     "view_release": "Version ansehen"
   },
   "nav": {
+    "accounts": "Konto wechseln",
     "vaults": "Tresore",
     "settings": "Einstellungen",
     "vault": "Tresor",
@@ -660,6 +661,7 @@
       "sort_first_met": "Erstes Treffen",
       "sort_updated": "Zuletzt aktualisiert",
       "filter_label": "Nach Bezeichnung filtern",
+      "filter_company": "Nach Unternehmen filtern",
       "all_labels": "Alle Bezeichnungen",
       "filter_group": "Nach Gruppe filtern",
       "all_groups": "Alle Gruppen",
@@ -1463,6 +1465,7 @@
     "invite": "Benutzer einladen",
     "email": "E-Mail-Adresse",
     "permission": "Berechtigung",
+    "account_member": "Kontomitglied (kein Tresorzugang)",
     "permission.manager": "Manager",
     "permission.editor": "Bearbeiter",
     "permission.viewer": "Betrachter",
@@ -1473,7 +1476,30 @@
     "delete": "Einladung zurückziehen",
     "deleteConfirm": "Diese Einladung zurückziehen?"
   },
+  "emailChange": {
+    "title": "E-Mail-Änderung bestätigen",
+    "confirm": "Diese E-Mail-Adresse bestätigen",
+    "done": "Bestätigt. Die Adresse wird erst geändert, wenn sowohl das alte als auch das neue Postfach bestätigt wurden. Melden Sie sich anschließend mit der neuen Adresse an.",
+    "login": "Zur Anmeldung"
+  },
+  "setPassword": {
+    "title": "Passwort festlegen",
+    "password": "Neues Passwort",
+    "confirm": "Passwort bestätigen",
+    "mismatch": "Die Passwörter stimmen nicht überein",
+    "submit": "Passwort speichern",
+    "success": "Passwort aktualisiert. Bitte melden Sie sich an.",
+    "invalid": "Dieser Link ist ungültig oder abgelaufen. Bitten Sie einen Administrator um einen neuen Link."
+  },
   "acceptInvite": {
+    "vaultScope": "Einladung zu einem Tresor",
+    "accountScope": "Einladung zu einem Konto (kein automatischer Tresorzugang)",
+    "invalid": "Diese Einladung ist ungültig oder abgelaufen.",
+    "signedInAs": "Angemeldet als {{email}}",
+    "acceptExisting": "Mit diesem Konto annehmen",
+    "switchUser": "Mit einem anderen Konto anmelden",
+    "haveAccount": "Schon ein Konto? Anmelden",
+    "accepted": "Einladung angenommen",
     "title": "Einladung annehmen",
     "subtitle": "Sie wurden eingeladen beizutreten. Erstellen Sie Ihr Konto, um loszulegen.",
     "submit": "Konto erstellen",
@@ -1543,6 +1569,11 @@
     "users": "Benutzer",
     "default_template": "Standardvorlage",
     "add_category": "Kategorie hinzufügen",
+    "life_presets_title": "Lebensereignisse",
+    "life_presets_description": "Optionale Lebensereignisse für diesen Tresor hinzufügen. Bestehende Aktivitäten bleiben unverändert.",
+    "life_presets_confirm": "Fehlende Ereignistypen installieren? Zuvor gelöschte Typen können wieder erscheinen.",
+    "life_presets_install": "Ereignistypen installieren",
+    "life_presets_installed": "Ereignistypen sind verfügbar",
     "add_type": "Typ hinzufügen",
     "add_user": "Benutzer hinzufügen",
     "hex_color": "Hex-Farbe",
@@ -1687,6 +1718,14 @@
     "cron_enabled_label": "Aktiviert"
   },
   "admin": {
+    "audit": {
+      "title": "System- und Sicherheitsprotokoll",
+      "description": "Nur Verwaltungsaktionen und Serverfehler; private Tresorinhalte und Zugriffsverläufe sind ausgeschlossen.",
+      "time": "Zeit",
+      "action": "Vorgang",
+      "status": "Status",
+      "request_id": "Anfrage-ID"
+    },
     "tab_users": "Benutzer",
     "tab_settings": "Einstellungen",
     "tab_backups": "Backups",
@@ -1726,6 +1765,16 @@
     },
     "users": {
       "title": "Benutzerverwaltung",
+      "create": "Benutzer anlegen",
+      "create_hint": "Ein privates Konto wird erstellt. Der Benutzer legt sein Passwort über einen einmaligen E-Mail-Link selbst fest. SMTP muss konfiguriert sein; es wird kein Tresorzugang gewährt.",
+      "created_email": "Benutzer erstellt; E-Mail zur Passworteinrichtung gesendet",
+      "first_name": "Vorname",
+      "last_name": "Nachname",
+      "reset_password": "Passwort-Reset senden",
+      "reset_sent": "E-Mail zum Zurücksetzen gesendet",
+      "edit_identity": "Benutzerdaten bearbeiten",
+      "email_confirmation_hint": "Eine neue E-Mail-Adresse muss im alten und im neuen Postfach bestätigt werden. Passwort und Tresorzugang bleiben erhalten.",
+      "email_confirmation_sent": "Bestätigungslinks an beide Adressen gesendet",
       "description": "Alle registrierten Benutzer dieser Instanz verwalten",
       "name": "Name",
       "email": "E-Mail",

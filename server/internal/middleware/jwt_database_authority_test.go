@@ -111,6 +111,9 @@ func runJWTAdministratorPrivilegeContract(t *testing.T, contract jwtAdministrato
 			if err := db.Create(&user).Error; err != nil {
 				t.Fatalf("create user: %v", err)
 			}
+			if err := db.Create(&models.AccountMembership{AccountID: account.ID, UserID: user.ID, IsAdmin: user.IsAccountAdministrator}).Error; err != nil {
+				t.Fatalf("create account membership: %v", err)
+			}
 
 			claims := &JWTClaims{
 				UserID:    user.ID,

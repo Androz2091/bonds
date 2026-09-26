@@ -576,7 +576,7 @@ vi.mock("@/api", () => ({
       contactsList: vi.fn(),
     },
     vaults: { vaultsList: vi.fn() },
-    personalize: { personalizeDetail: vi.fn() },
+    personalize: { personalizeDetail2: vi.fn() },
     vcard: { contactsVcardList: vi.fn() },
   },
   httpClient: {

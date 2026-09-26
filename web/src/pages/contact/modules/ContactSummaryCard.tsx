@@ -120,10 +120,10 @@ export default function ContactSummaryCard({
   });
 
   const { data: relationshipTypesWithGroup = [] } = useQuery({
-    queryKey: ["personalize", "relationship-types", "all"],
+    queryKey: ["vaults", vaultId, "personalize", "relationship-types", "all"],
     queryFn: async () => {
       const res =
-        await api.relationshipTypes.personalizeRelationshipTypesAllList();
+        await api.relationshipTypes.relationshipTypesList(String(vaultId));
       return res.data ?? [];
     },
     enabled: relationships.length > 0,
@@ -154,7 +154,7 @@ export default function ContactSummaryCard({
   const { data: genders = [] } = useQuery<PersonalizeItem[]>({
     queryKey: ["vaults", vaultId, "personalize", "genders"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("genders");
+      const res = await api.personalize.personalizeDetail2(String(vaultId), "genders");
       return res.data ?? [];
     },
   });
@@ -162,7 +162,7 @@ export default function ContactSummaryCard({
   const { data: pronouns = [] } = useQuery<PersonalizeItem[]>({
     queryKey: ["vaults", vaultId, "personalize", "pronouns"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("pronouns");
+      const res = await api.personalize.personalizeDetail2(String(vaultId), "pronouns");
       return res.data ?? [];
     },
   });
@@ -170,15 +170,15 @@ export default function ContactSummaryCard({
   const { data: religions = [] } = useQuery<PersonalizeItem[]>({
     queryKey: ["vaults", vaultId, "personalize", "religions"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("religions");
+      const res = await api.personalize.personalizeDetail2(String(vaultId), "religions");
       return res.data ?? [];
     },
   });
 
   const { data: contactInfoTypes = [] } = useQuery<PersonalizeItem[]>({
-    queryKey: ["personalize", "contact-info-types"],
+    queryKey: ["vaults", vaultId, "personalize", "contact-info-types"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("contact-info-types");
+      const res = await api.personalize.personalizeDetail2(String(vaultId), "contact-info-types");
       return res.data ?? [];
     },
   });

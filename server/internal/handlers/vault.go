@@ -174,7 +174,8 @@ func VaultPermissionMiddleware(vaultService *services.VaultService, requiredPerm
 				vaultID = c.Param("id")
 			}
 
-			if err := vaultService.CheckUserVaultAccess(userID, vaultID, requiredPerm); err != nil {
+			accountID, err := vaultService.CheckUserVaultAccessWithAccount(userID, vaultID, requiredPerm)
+			if err != nil {
 				if errors.Is(err, services.ErrVaultForbidden) {
 					return response.Forbidden(c, "err.no_vault_access_short")
 				}
@@ -183,6 +184,7 @@ func VaultPermissionMiddleware(vaultService *services.VaultService, requiredPerm
 				}
 				return response.InternalError(c, "err.failed_to_check_permissions")
 			}
+			c.Set("vault_account_id", accountID)
 
 			return next(c)
 		}

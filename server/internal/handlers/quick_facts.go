@@ -271,7 +271,7 @@ func (h *QuickFactHandler) validateUploadSize(c *echo.Context, fileSize int64) e
 	if fileSize > maxUploadSize {
 		return response.BadRequest(c, "err.file_too_large", map[string]string{"max_size": fmt.Sprintf("%d MB", maxUploadSize/(1024*1024))})
 	}
-	accountID := middleware.GetAccountID(c)
+	accountID := middleware.GetVaultAccountID(c)
 	if h.storageInfoService != nil {
 		storageInfo, err := h.storageInfoService.Get(accountID)
 		if err == nil && storageInfo.LimitBytes > 0 && storageInfo.UsedBytes+fileSize > storageInfo.LimitBytes {

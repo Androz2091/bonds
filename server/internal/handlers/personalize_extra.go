@@ -440,12 +440,25 @@ func NewRelationshipTypeHandler(svc *services.RelationshipTypeService) *Relation
 //	@Router			/settings/personalize/relationship-types/all [get]
 func (h *RelationshipTypeHandler) ListAll(c *echo.Context) error {
 	accountID := middleware.GetAccountID(c)
+	if scoped := middleware.GetVaultAccountID(c); scoped != "" {
+		accountID = scoped
+	}
 	types, err := h.svc.ListAll(accountID)
 	if err != nil {
 		return response.InternalError(c, "err.failed_to_list_relationship_types")
 	}
 	return response.OK(c, types)
 }
+
+// ListAllForVault godoc
+//
+// @Summary List relationship types for an accessible vault
+// @Tags relationship-types
+// @Security BearerAuth
+// @Param vault_id path string true "Vault ID"
+// @Success 200 {object} response.APIResponse{data=[]dto.RelationshipTypeWithGroupResponse}
+// @Router /vaults/{vault_id}/relationship-types [get]
+func (h *RelationshipTypeHandler) ListAllForVault(c *echo.Context) error { return h.ListAll(c) }
 
 // List godoc
 //
@@ -628,6 +641,9 @@ func NewCallReasonHandler(svc *services.CallReasonService) *CallReasonHandler {
 //	@Router			/settings/personalize/call-reasons/{id}/reasons [get]
 func (h *CallReasonHandler) List(c *echo.Context) error {
 	accountID := middleware.GetAccountID(c)
+	if scoped := middleware.GetVaultAccountID(c); scoped != "" {
+		accountID = scoped
+	}
 	callReasonTypeID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		return response.BadRequest(c, "err.invalid_call_reason_type_id", nil)
@@ -641,6 +657,17 @@ func (h *CallReasonHandler) List(c *echo.Context) error {
 	}
 	return response.OK(c, reasons)
 }
+
+// ListForVault godoc
+//
+// @Summary List call reasons for an accessible vault
+// @Tags call-reasons
+// @Security BearerAuth
+// @Param vault_id path string true "Vault ID"
+// @Param id path integer true "Call reason type ID"
+// @Success 200 {object} response.APIResponse{data=[]dto.CallReasonResponse}
+// @Router /vaults/{vault_id}/call-reason-types/{id}/reasons [get]
+func (h *CallReasonHandler) ListForVault(c *echo.Context) error { return h.List(c) }
 
 // Create godoc
 //

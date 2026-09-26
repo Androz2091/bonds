@@ -7,7 +7,6 @@ import {
   Modal,
   Form,
   Input,
-  Select,
   Tag,
   Popconfirm,
   Spin,
@@ -49,7 +48,7 @@ export default function Invitations() {
   const meta = invitationsResponse?.meta;
 
   const createMutation = useMutation({
-    mutationFn: (values: { email: string; permission: 100 | 200 | 300 }) =>
+    mutationFn: (values: { email: string }) =>
       api.invitations.invitationsCreate(values),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: invalidateKey });
@@ -67,28 +66,6 @@ export default function Invitations() {
     onError: (e: APIError) => message.error(e.message),
   });
 
-  const permissionLabel = (perm: number) => {
-    switch (perm) {
-      case 100:
-        return t("invitations.permission.manager");
-      case 200:
-        return t("invitations.permission.editor");
-      case 300:
-        return t("invitations.permission.viewer");
-      default:
-        return String(perm);
-    }
-  };
-
-  const permissionColor = (perm: number) => {
-    switch (perm) {
-      case 100: return "blue";
-      case 200: return "cyan";
-      case 300: return "default";
-      default: return "default";
-    }
-  };
-
   const columns: ColumnsType<InvitationType> = [
     {
       title: t("invitations.email"),
@@ -100,13 +77,8 @@ export default function Invitations() {
     },
     {
       title: t("invitations.permission"),
-      dataIndex: "permission",
       key: "permission",
-      render: (val: number) => (
-        <Tag color={permissionColor(val)}>
-          {permissionLabel(val)}
-        </Tag>
-      ),
+      render: () => <Tag>{t("invitations.account_member")}</Tag>,
     },
     {
       title: t("common.type"),
@@ -219,28 +191,6 @@ export default function Invitations() {
             rules={[{ required: true, type: "email" }]}
           >
             <Input placeholder={t("invitations.email")} />
-          </Form.Item>
-          <Form.Item
-            name="permission"
-            label={t("invitations.permission")}
-            rules={[{ required: true }]}
-          >
-            <Select
-              options={[
-                {
-                  value: 100,
-                  label: t("invitations.permission.manager"),
-                },
-                {
-                  value: 200,
-                  label: t("invitations.permission.editor"),
-                },
-                {
-                  value: 300,
-                  label: t("invitations.permission.viewer"),
-                },
-              ]}
-            />
           </Form.Item>
         </Form>
       </Modal>

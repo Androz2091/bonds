@@ -12,6 +12,7 @@ import {
   Button,
   Switch,
   List,
+  Table,
   Space,
   App,
   Popconfirm,
@@ -58,9 +59,12 @@ import type {
   GithubComNaibaBondsInternalDtoVaultSettingsResponse,
 } from "@/api";
 import type {
+  GithubComNaibaBondsInternalDtoInvitationResponse as InvitationResponse,
   GithubComNaibaBondsInternalDtoMonicaImportResponse,
   GithubComNaibaBondsInternalDtoCSVImportResponse,
+  GithubComNaibaBondsInternalDtoAuditEventResponse as AuditEvent,
 } from "@/api/generated/data-contracts";
+import { useDateFormat, formatDateTime } from "@/utils/dateFormat";
 import VaultCompanies from "./VaultCompanies";
 import { getReadableLabelTagColors } from "@/utils/labelColor";
 import {
@@ -350,15 +354,27 @@ function UsersTab() {
     },
   });
 
+  const { data: pendingInvitations = [] } = useQuery({
+    queryKey: ["vault", vaultId, "invitations"],
+    queryFn: async (): Promise<InvitationResponse[]> => (await api.invitations.settingsInvitationsList(String(vaultId))).data ?? [],
+  });
+
   const inviteMutation = useMutation({
     mutationFn: (values: { email: string; permission: 100 | 200 | 300 }) =>
-      api.vaultSettings.settingsUsersCreate(String(vaultId), values),
+	  api.invitations.settingsInvitationsCreate(String(vaultId), values),
     onSuccess: () => {
-      message.success(t("invitations.status.pending")); // Or specific success message
+      message.success(t("invitations.status.pending"));
       queryClient.invalidateQueries({
-        queryKey: ["vault", vaultId, "users"],
+        queryKey: ["vault", vaultId, "invitations"],
       });
     },
+    onError: (e: APIError) => message.error(e.message),
+  });
+
+  const cancelInvitation = useMutation({
+    mutationFn: (invitationId: number) =>
+      api.invitations.settingsInvitationsDelete(String(vaultId), invitationId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["vault", vaultId, "invitations"] }),
     onError: (e: APIError) => message.error(e.message),
   });
 
@@ -488,6 +504,24 @@ function UsersTab() {
             </Button>
           </Form.Item>
         </Form>
+      </Card>
+
+      <Card title={t("invitations.status.pending")}>
+        <List
+          dataSource={pendingInvitations.filter((invitation) => !invitation.accepted_at)}
+          renderItem={(invitation) => (
+            <List.Item
+              actions={[
+                <Popconfirm key="cancel" title={t("invitations.deleteConfirm")}
+                  onConfirm={() => invitation.id && cancelInvitation.mutate(invitation.id)}>
+                  <Button danger type="link">{t("invitations.delete")}</Button>
+                </Popconfirm>,
+              ]}
+            >
+              {invitation.email}
+            </List.Item>
+          )}
+        />
       </Card>
 
       <Card title={t("vault_settings.users")}>
@@ -1318,6 +1352,14 @@ function ActivitiesTab({
       (await api.vaultSettings.settingsActivityCategoriesList(String(vaultId)))
         .data ?? [],
   });
+  const installLifeMilestones = useMutation({
+    mutationFn: () => api.vaultSettings.settingsActivityPresetsLifeMilestonesCreate(String(vaultId)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+      message.success(t("vault_settings.life_presets_installed"));
+    },
+    onError: (e: APIError) => message.error(e.message),
+  });
 
   const createCategory = useMutation({
     mutationFn: (data: { label: string }) =>
@@ -1417,6 +1459,17 @@ function ActivitiesTab({
 
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
+      <Card title={t("vault_settings.life_presets_title")}>
+        <Space direction="vertical">
+          <Text type="secondary">{t("vault_settings.life_presets_description")}</Text>
+          <Popconfirm title={t("vault_settings.life_presets_confirm")}
+            onConfirm={() => installLifeMilestones.mutate()}>
+            <Button loading={installLifeMilestones.isPending}>
+              {t("vault_settings.life_presets_install")}
+            </Button>
+          </Popconfirm>
+        </Space>
+      </Card>
       <Card title={t("vault_settings.add_category")}>
         <Space>
           <Input
@@ -2149,6 +2202,33 @@ function MonicaImportTab() {
   );
 }
 
+function VaultAuditTab({ vaultId }: { vaultId: string }) {
+  const { t } = useTranslation();
+  const dateFormats = useDateFormat();
+  const [page, setPage] = useState(1);
+  const { data, isLoading } = useQuery({
+    queryKey: ["vaults", vaultId, "audit", page],
+    queryFn: async () => {
+      const response = await api.vaultSettings.settingsAuditList(vaultId, { page, per_page: 25 });
+      return { rows: (response.data ?? []) as AuditEvent[], total: response.meta?.total ?? 0 };
+    },
+  });
+  return (
+    <Card title={t("admin.audit.title")}>
+      <Table<AuditEvent> dataSource={data?.rows ?? []} loading={isLoading} rowKey="id"
+        columns={[
+          { title: t("admin.audit.time"), dataIndex: "created_at", render: (value: string) => formatDateTime(value, dateFormats) },
+          { title: t("admin.audit.action"), key: "action", render: (_, row) => `${row.method} ${row.route}` },
+          { title: t("admin.audit.status"), dataIndex: "status" },
+          { title: t("admin.audit.request_id"), dataIndex: "request_id", ellipsis: true },
+        ]}
+        pagination={{ current: page, total: data?.total ?? 0, pageSize: 25, onChange: setPage }}
+        size="small" scroll={{ x: 700 }}
+      />
+    </Card>
+  );
+}
+
 export default function VaultSettings() {
   const { id } = useParams<{ id: string }>();
   const vaultId = id!;
@@ -2285,6 +2365,7 @@ export default function VaultSettings() {
       label: t("vault_settings.users"),
       children: <UsersTab key={vaultId} />,
     },
+    { key: "audit", label: t("admin.audit.title"), children: <VaultAuditTab vaultId={vaultId} /> },
     {
       key: "labels",
       label: t("vault_settings.labels"),

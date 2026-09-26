@@ -92,9 +92,9 @@ export default function GiftsModule({
   const { data: occasions = [], isLoading: isOccasionsLoading } = useQuery<
     PersonalizeItem[]
   >({
-    queryKey: ["personalize", "gift-occasions"],
+    queryKey: ["vaults", vaultId, "personalize", "gift-occasions"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("gift-occasions");
+      const res = await api.personalize.personalizeDetail2(String(vaultId), "gift-occasions");
       return res.data ?? [];
     },
   });
@@ -102,9 +102,9 @@ export default function GiftsModule({
   const { data: states = [], isLoading: isStatesLoading } = useQuery<
     PersonalizeItem[]
   >({
-    queryKey: ["personalize", "gift-states"],
+    queryKey: ["vaults", vaultId, "personalize", "gift-states"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("gift-states");
+      const res = await api.personalize.personalizeDetail2(String(vaultId), "gift-states");
       return res.data ?? [];
     },
   });

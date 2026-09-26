@@ -49,6 +49,7 @@
     "view_release": "Ver versión"
   },
   "nav": {
+    "accounts": "Cambiar de cuenta",
     "vaults": "Bóvedas",
     "settings": "Configuración",
     "vault": "Bóveda",
@@ -660,6 +661,7 @@
       "sort_first_met": "Primer encuentro",
       "sort_updated": "Última actualización",
       "filter_label": "Filtrar por etiqueta",
+      "filter_company": "Filtrar por empresa",
       "all_labels": "Todas las etiquetas",
       "filter_group": "Filtrar por grupo",
       "all_groups": "Todos los grupos",
@@ -1463,6 +1465,7 @@
     "invite": "Invitar usuario",
     "email": "Dirección de correo electrónico",
     "permission": "Permiso",
+    "account_member": "Miembro de la cuenta (sin acceso a bóvedas)",
     "permission.manager": "Manager",
     "permission.editor": "Editor",
     "permission.viewer": "Viewer",
@@ -1473,7 +1476,30 @@
     "delete": "Cancelar invitación",
     "deleteConfirm": "¿Cancelar esta invitación?"
   },
+  "emailChange": {
+    "title": "Confirmar cambio de correo",
+    "confirm": "Confirmar esta dirección",
+    "done": "Confirmado. La dirección solo cambiará cuando se confirme desde los buzones antiguo y nuevo. Después, inicia sesión con la nueva dirección.",
+    "login": "Ir al inicio de sesión"
+  },
+  "setPassword": {
+    "title": "Establecer contraseña",
+    "password": "Nueva contraseña",
+    "confirm": "Confirmar contraseña",
+    "mismatch": "Las contraseñas no coinciden",
+    "submit": "Guardar contraseña",
+    "success": "Contraseña actualizada. Inicia sesión.",
+    "invalid": "Este enlace no es válido o ha caducado. Solicita otro a un administrador."
+  },
   "acceptInvite": {
+    "vaultScope": "Invitación a una bóveda",
+    "accountScope": "Invitación a una cuenta (sin acceso automático a las bóvedas)",
+    "invalid": "La invitación no es válida o ha caducado.",
+    "signedInAs": "Sesión iniciada como {{email}}",
+    "acceptExisting": "Aceptar con esta cuenta",
+    "switchUser": "Iniciar sesión con otra cuenta",
+    "haveAccount": "¿Ya tienes una cuenta? Inicia sesión",
+    "accepted": "Invitación aceptada",
     "title": "Aceptar invitación",
     "subtitle": "Has sido invitado a unirte. Crea tu cuenta para empezar.",
     "submit": "Crear cuenta",
@@ -1543,6 +1569,11 @@
     "users": "Usuarios",
     "default_template": "Plantilla por defecto",
     "add_category": "Añadir categoría",
+    "life_presets_title": "Eventos vitales",
+    "life_presets_description": "Añade categorías opcionales de eventos vitales a esta bóveda. Las actividades actuales no cambiarán.",
+    "life_presets_confirm": "¿Instalar los tipos que faltan? Los tipos eliminados anteriormente podrían reaparecer.",
+    "life_presets_install": "Instalar tipos de eventos",
+    "life_presets_installed": "Tipos de eventos disponibles",
     "add_type": "Añadir tipo",
     "add_user": "Añadir usuario",
     "hex_color": "Color hexadecimal",
@@ -1687,6 +1718,14 @@
     "cron_enabled_label": "Activado"
   },
   "admin": {
+    "audit": {
+      "title": "Registro del sistema y seguridad",
+      "description": "Solo acciones administrativas y errores del servidor; se excluyen el contenido privado y el historial de acceso a bóvedas.",
+      "time": "Fecha",
+      "action": "Operación",
+      "status": "Estado",
+      "request_id": "ID de solicitud"
+    },
     "tab_users": "Usuarios",
     "tab_settings": "Ajustes",
     "tab_backups": "Copias de seguridad",
@@ -1726,6 +1765,16 @@
     },
     "users": {
       "title": "Gestión de usuarios",
+      "create": "Crear usuario",
+      "create_hint": "Se creará una cuenta privada. El usuario elegirá su contraseña mediante un enlace de un solo uso. Configura SMTP primero; no se concede acceso a bóvedas.",
+      "created_email": "Usuario creado; correo para establecer la contraseña enviado",
+      "first_name": "Nombre",
+      "last_name": "Apellido",
+      "reset_password": "Enviar restablecimiento",
+      "reset_sent": "Correo de restablecimiento enviado",
+      "edit_identity": "Editar identidad",
+      "email_confirmation_hint": "El cambio de correo requiere confirmación desde las direcciones antigua y nueva. La contraseña y el acceso a bóvedas permanecen intactos.",
+      "email_confirmation_sent": "Enlaces de confirmación enviados a ambas direcciones",
       "description": "Gestiona todos los usuarios registrados en esta instancia",
       "name": "Nombre",
       "email": "Correo electrónico",

@@ -54,6 +54,9 @@ func createSecondUser(t *testing.T, ts *testServer, accountID, email string, isA
 	if err := ts.db.Create(&user).Error; err != nil {
 		t.Fatalf("failed to create second user: %v", err)
 	}
+	if err := ts.db.Create(&models.AccountMembership{AccountID: accountID, UserID: user.ID, IsAdmin: isAdmin}).Error; err != nil {
+		t.Fatalf("failed to create account membership: %v", err)
+	}
 	return user
 }
 
@@ -1747,7 +1750,7 @@ func TestViewerCannotListVaultUsers(t *testing.T) {
 
 func TestViewerCannotAddVaultUser(t *testing.T) {
 	ts, _, viewerToken, vaultID, _ := setupViewerTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vaultID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vaultID)
 	rec := ts.doRequest(http.MethodPost, path, `{"email":"intruder@example.com","permission":300}`, viewerToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Viewer adding vault user, got %d: %s", rec.Code, rec.Body.String())
@@ -1792,7 +1795,7 @@ func TestEditorCannotUpdateVaultSettings(t *testing.T) {
 
 func TestEditorCannotManageVaultUsers(t *testing.T) {
 	ts, _, editorToken, vaultID, _ := setupEditorTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vaultID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vaultID)
 	rec := ts.doRequest(http.MethodPost, path, `{"email":"intruder@example.com","permission":300}`, editorToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Editor managing vault users, got %d: %s", rec.Code, rec.Body.String())
@@ -2015,7 +2018,7 @@ func TestDisabledUserCannotAccessSettings(t *testing.T) {
 
 func TestViewerCannotAddUserToVault(t *testing.T) {
 	ts, _, viewerToken, vaultID, _ := setupViewerTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vaultID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vaultID)
 	rec := ts.doRequest(http.MethodPost, path, `{"email":"intruder@example.com","permission":300}`, viewerToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Viewer adding user to vault, got %d: %s", rec.Code, rec.Body.String())
@@ -2024,7 +2027,7 @@ func TestViewerCannotAddUserToVault(t *testing.T) {
 
 func TestEditorCannotAddUserToVault(t *testing.T) {
 	ts, _, editorToken, vaultID, _ := setupEditorTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vaultID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vaultID)
 	rec := ts.doRequest(http.MethodPost, path, `{"email":"intruder@example.com","permission":300}`, editorToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Editor adding user to vault, got %d: %s", rec.Code, rec.Body.String())
@@ -3506,7 +3509,7 @@ func TestInvalidPermissionValueRejectedOnAddVaultUser(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			path := fmt.Sprintf("/api/vaults/%s/settings/users", vault.ID)
+			path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vault.ID)
 			body := fmt.Sprintf(`{"email":"victim-%s@example.com","permission":%d}`, tc.name, tc.permission)
 			rec := ts.doRequest(http.MethodPost, path, body, adminToken)
 			if rec.Code != http.StatusUnprocessableEntity {
@@ -3546,7 +3549,7 @@ func TestValidPermissionValuesAccepted(t *testing.T) {
 	vault := ts.createTestVault(t, adminToken, "PermValid Vault")
 
 	for _, perm := range []int{100, 200, 300} {
-		path := fmt.Sprintf("/api/vaults/%s/settings/users", vault.ID)
+		path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vault.ID)
 		body := fmt.Sprintf(`{"email":"valid-perm-%d@example.com","permission":%d}`, perm, perm)
 		rec := ts.doRequest(http.MethodPost, path, body, adminToken)
 		// 用户可能不存在 → 404，但不应该是 422（校验错误）
@@ -3558,16 +3561,21 @@ func TestValidPermissionValuesAccepted(t *testing.T) {
 
 // ==================== AP. Cross-Account Add User to Vault ====================
 
-func TestCrossAccountAddUserToVaultBlocked(t *testing.T) {
+func TestCrossAccountUserRequiresInvitationAcceptance(t *testing.T) {
 	ts := setupTestServer(t)
 	adminToken1, _ := ts.registerTestUser(t, "xacct-vault-admin@example.com")
 	vault1 := ts.createTestVault(t, adminToken1, "XAcct Vault")
 	ts.registerTestUser(t, "xacct-victim@example.com")
 
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vault1.ID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vault1.ID)
 	body := `{"email":"xacct-victim@example.com","permission":300}`
 	rec := ts.doRequest(http.MethodPost, path, body, adminToken1)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404 for cross-account add user to vault, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Errorf("expected 201 for scoped invitation, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var membership int64
+	ts.db.Model(&models.UserVault{}).Where("vault_id = ?", vault1.ID).Count(&membership)
+	if membership != 1 {
+		t.Errorf("inviting an existing user must not grant access before acceptance: %d members", membership)
 	}
 }

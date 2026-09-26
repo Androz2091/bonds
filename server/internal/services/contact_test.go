@@ -35,6 +35,52 @@ func setupContactTest(t *testing.T) (*ContactService, string, string, string) {
 	return NewContactService(db), vault.ID, resp.User.ID, resp.User.AccountID
 }
 
+func TestListContactsCompanySearchAndFilter(t *testing.T) {
+	svc, vaultID, userID, _ := setupContactTest(t)
+	a, err := svc.CreateContact(vaultID, userID, dto.CreateContactRequest{FirstName: "Alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := svc.CreateContact(vaultID, userID, dto.CreateContactRequest{FirstName: "Bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	company := models.Company{VaultID: vaultID, Name: "Northwind Studio"}
+	if err := svc.db.Create(&company).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Create(&models.ContactCompany{ContactID: a.ID, CompanyID: company.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Create(&models.ContactCompany{ContactID: b.ID, CompanyID: company.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	contacts, meta, err := svc.ListContactsWithCompany(vaultID, userID, 1, 20, "", "", "", company.ID)
+	if err != nil || meta.Total != 2 || len(contacts) != 2 {
+		t.Fatalf("company filter: count=%d, err=%v", meta.Total, err)
+	}
+	contacts, meta, err = svc.ListContacts(vaultID, userID, 1, 20, "northwind", "", "")
+	if err != nil || meta.Total != 2 || len(contacts) != 2 {
+		t.Fatalf("company search: count=%d, err=%v", meta.Total, err)
+	}
+	var vault models.Vault
+	if err := svc.db.First(&vault, "id = ?", vaultID).Error; err != nil {
+		t.Fatal(err)
+	}
+	otherVault, err := NewVaultService(svc.db).CreateVault(vault.AccountID, userID, dto.CreateVaultRequest{Name: "Other"}, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := models.Company{VaultID: otherVault.ID, Name: "Outside"}
+	if err := svc.db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	contacts, meta, err = svc.ListContactsWithCompany(vaultID, userID, 1, 20, "", "", "", other.ID)
+	if err != nil || meta.Total != 0 || len(contacts) != 0 {
+		t.Fatalf("cross-vault company filter: count=%d, err=%v", meta.Total, err)
+	}
+}
+
 func setupContactWithFirstMetThrough(t *testing.T) (*ContactService, string, string, *dto.ContactResponse, *dto.ContactResponse) {
 	t.Helper()
 	svc, vaultID, userID, _ := setupContactTest(t)

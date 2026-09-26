@@ -141,7 +141,125 @@ func (h *InvitationHandler) Accept(c *echo.Context) error {
 		if errors.Is(err, services.ErrInvitationExpired) {
 			return response.BadRequest(c, "err.invitation_expired", nil)
 		}
+		if errors.Is(err, services.ErrExistingUserLoginRequired) {
+			return response.Conflict(c, "err.invitation_login_required")
+		}
 		return response.InternalError(c, "err.failed_to_accept_invitation")
 	}
 	return response.OK(c, invitation)
+}
+
+// Preview godoc
+//
+//	@Summary	Preview a pending invitation
+//	@Tags	invitations
+//	@Param	token	path	string	true	"Invitation token"
+//	@Success	200	{object}	response.APIResponse{data=dto.InvitationResponse}
+//	@Router	/invitations/{token} [get]
+func (h *InvitationHandler) Preview(c *echo.Context) error {
+	invitation, err := h.invitationService.Preview(c.Param("token"))
+	if err != nil {
+		return response.NotFound(c, "err.invitation_not_found")
+	}
+	return response.OK(c, invitation)
+}
+
+// AcceptExisting godoc
+//
+//	@Summary	Accept an invitation using the current user's credentials
+//	@Tags	invitations
+//	@Security	BearerAuth
+//	@Param	request	body	dto.AcceptExistingInvitationRequest	true	"Invitation token"
+//	@Success	200	{object}	response.APIResponse{data=dto.InvitationResponse}
+//	@Router	/invitations/accept-existing [post]
+func (h *InvitationHandler) AcceptExisting(c *echo.Context) error {
+	var req dto.AcceptExistingInvitationRequest
+	if err := c.Bind(&req); err != nil {
+		return response.BadRequest(c, "err.invalid_request_body", nil)
+	}
+	if err := validateRequest(req); err != nil {
+		return response.ValidationError(c, map[string]string{"validation": err.Error()})
+	}
+	invitation, err := h.invitationService.AcceptExisting(req.Token, middleware.GetUserID(c))
+	if err != nil {
+		if errors.Is(err, services.ErrInvitationIdentityMismatch) {
+			return response.Forbidden(c, "err.invitation_identity_mismatch")
+		}
+		if errors.Is(err, services.ErrInvitationNotFound) {
+			return response.NotFound(c, "err.invitation_not_found")
+		}
+		return response.InternalError(c, "err.failed_to_accept_invitation")
+	}
+	return response.OK(c, invitation)
+}
+
+// ListVault godoc
+//
+//	@Summary	List invitations to a vault
+//	@Tags	invitations
+//	@Security	BearerAuth
+//	@Param	vault_id	path	string	true	"Vault ID"
+//	@Success	200	{object}	response.APIResponse{data=[]dto.InvitationResponse}
+//	@Router	/vaults/{vault_id}/settings/invitations [get]
+func (h *InvitationHandler) ListVault(c *echo.Context) error {
+	page, _ := strconv.Atoi(c.QueryParam("page"))
+	perPage, _ := strconv.Atoi(c.QueryParam("per_page"))
+	items, meta, err := h.invitationService.ListVault(c.Param("vault_id"), page, perPage)
+	if err != nil {
+		return response.InternalError(c, "err.failed_to_list_invitations")
+	}
+	return response.Paginated(c, items, meta)
+}
+
+// CreateVault godoc
+//
+//	@Summary	Invite a user to a specific vault
+//	@Tags	invitations
+//	@Security	BearerAuth
+//	@Param	vault_id	path	string	true	"Vault ID"
+//	@Param	request	body	dto.CreateVaultInvitationRequest	true	"Invitation"
+//	@Success	201	{object}	response.APIResponse{data=dto.InvitationResponse}
+//	@Router	/vaults/{vault_id}/settings/invitations [post]
+func (h *InvitationHandler) CreateVault(c *echo.Context) error {
+	var req dto.CreateVaultInvitationRequest
+	if err := c.Bind(&req); err != nil {
+		return response.BadRequest(c, "err.invalid_request_body", nil)
+	}
+	if err := validateRequest(req); err != nil {
+		return response.ValidationError(c, map[string]string{"validation": err.Error()})
+	}
+	item, err := h.invitationService.CreateVault(c.Param("vault_id"), middleware.GetUserID(c), req)
+	if err != nil {
+		if errors.Is(err, services.ErrUserAlreadyInVault) {
+			return response.Conflict(c, "err.user_already_in_vault")
+		}
+		if errors.Is(err, services.ErrInvitationForbidden) {
+			return response.Forbidden(c, "err.insufficient_permissions_short")
+		}
+		return response.InternalError(c, "err.failed_to_create_invitation")
+	}
+	return response.Created(c, item)
+}
+
+// DeleteVault godoc
+//
+//	@Summary	Cancel a vault invitation
+//	@Tags	invitations
+//	@Security	BearerAuth
+//	@Param	vault_id	path	string	true	"Vault ID"
+//	@Param	id	path	integer	true	"Invitation ID"
+//	@Success	204	"No Content"
+//	@Router	/vaults/{vault_id}/settings/invitations/{id} [delete]
+func (h *InvitationHandler) DeleteVault(c *echo.Context) error {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		return response.BadRequest(c, "err.invalid_invitation_id", nil)
+	}
+	if err := h.invitationService.DeleteVault(uint(id), c.Param("vault_id")); err != nil {
+		if errors.Is(err, services.ErrInvitationNotFound) {
+			return response.NotFound(c, "err.invitation_not_found")
+		}
+		return response.InternalError(c, "err.failed_to_delete_invitation")
+	}
+	return response.NoContent(c)
 }

@@ -22,6 +22,22 @@ type VaultSettingsHandler struct {
 	quickFactSvc    *services.VaultQuickFactTemplateService
 }
 
+// InstallLifeMilestones godoc
+//
+//	@Summary	Install life-milestone presets as activity types
+//	@Tags	vault-settings
+//	@Security	BearerAuth
+//	@Param	vault_id	path	string	true	"Vault ID"
+//	@Success	200	{object}	response.APIResponse{data=[]dto.ActivityCategoryResponse}
+//	@Router	/vaults/{vault_id}/settings/activity-presets/life-milestones [post]
+func (h *VaultSettingsHandler) InstallLifeMilestones(c *echo.Context) error {
+	items, err := h.activitySvc.InstallLifeMilestones(c.Param("vault_id"), middleware.GetLocale(c))
+	if err != nil {
+		return response.InternalError(c, "err.failed_to_create_activity_category")
+	}
+	return response.OK(c, items)
+}
+
 func NewVaultSettingsHandler(
 	settingsService *services.VaultSettingsService,
 	usersService *services.VaultUsersService,
@@ -171,7 +187,8 @@ func (h *VaultSettingsHandler) ListUsers(c *echo.Context) error {
 //	@Failure		409			{object}	response.APIResponse
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/users [post]
+//
+// Deprecated: direct user addition is no longer registered; use vault invitations.
 func (h *VaultSettingsHandler) AddUser(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	var req dto.AddVaultUserRequest

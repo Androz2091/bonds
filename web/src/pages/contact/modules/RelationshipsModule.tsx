@@ -278,12 +278,12 @@ export default function RelationshipsModule({
   // wrong relationship_type_id to be stored and incorrect labels on the graph.
   // Now fetches all actual RelationshipType records with group names for grouped select.
   const { data: relationshipTypes = [] } = useQuery({
-    queryKey: ["personalize", "relationship-types", "all"],
+    queryKey: ["vaults", vaultId, "personalize", "relationship-types", "all"],
     queryFn: async (): Promise<
       GithubComNaibaBondsInternalDtoRelationshipTypeWithGroupResponse[]
     > => {
       const res =
-        await api.relationshipTypes.personalizeRelationshipTypesAllList();
+        await api.relationshipTypes.relationshipTypesList(String(vaultId));
       return res.data ?? [];
     },
   });

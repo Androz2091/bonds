@@ -49,6 +49,7 @@
     "view_release": "Ver versão"
   },
   "nav": {
+    "accounts": "Trocar de conta",
     "vaults": "Cofres",
     "settings": "Configurações",
     "vault": "Cofre",
@@ -660,6 +661,7 @@
       "sort_first_met": "Primeiro encontro",
       "sort_updated": "Última atualização",
       "filter_label": "Filtrar por rótulo",
+      "filter_company": "Filtrar por empresa",
       "all_labels": "Todos os rótulos",
       "filter_group": "Filtrar por grupo",
       "all_groups": "Todos os grupos",
@@ -1463,6 +1465,7 @@
     "invite": "Convidar Usuário",
     "email": "Endereço de E-mail",
     "permission": "Permissão",
+    "account_member": "Membro da conta (sem acesso aos cofres)",
     "permission.manager": "Gerente",
     "permission.editor": "Editor",
     "permission.viewer": "Visualizador",
@@ -1473,7 +1476,30 @@
     "delete": "Cancelar Convite",
     "deleteConfirm": "Cancelar este convite?"
   },
+  "emailChange": {
+    "title": "Confirmar alteração de e-mail",
+    "confirm": "Confirmar este endereço",
+    "done": "Confirmado. O endereço só será alterado após a confirmação nas caixas de entrada antiga e nova. Depois, entre com o novo endereço.",
+    "login": "Ir para o login"
+  },
+  "setPassword": {
+    "title": "Definir senha",
+    "password": "Nova senha",
+    "confirm": "Confirmar senha",
+    "mismatch": "As senhas não coincidem",
+    "submit": "Salvar senha",
+    "success": "Senha atualizada. Faça login.",
+    "invalid": "Este link é inválido ou expirou. Peça um novo a um administrador."
+  },
   "acceptInvite": {
+    "vaultScope": "Convite para um cofre",
+    "accountScope": "Convite para uma conta (sem acesso automático aos cofres)",
+    "invalid": "Este convite é inválido ou expirou.",
+    "signedInAs": "Conectado como {{email}}",
+    "acceptExisting": "Aceitar com esta conta",
+    "switchUser": "Entrar com outra conta",
+    "haveAccount": "Já tem uma conta? Entre",
+    "accepted": "Convite aceito",
     "title": "Aceitar Convite",
     "subtitle": "Você foi convidado a participar. Crie sua conta para começar.",
     "submit": "Criar Conta",
@@ -1543,6 +1569,11 @@
     "users": "Usuários",
     "default_template": "Modelo Padrão",
     "add_category": "Adicionar Categoria",
+    "life_presets_title": "Eventos da vida",
+    "life_presets_description": "Adicione categorias opcionais de eventos da vida a este cofre. As atividades existentes não serão alteradas.",
+    "life_presets_confirm": "Instalar os tipos ausentes? Tipos removidos anteriormente podem reaparecer.",
+    "life_presets_install": "Instalar tipos de eventos",
+    "life_presets_installed": "Tipos de eventos disponíveis",
     "add_type": "Adicionar Tipo",
     "add_user": "Adicionar Usuário",
     "hex_color": "Cor Hexadecimal",
@@ -1687,6 +1718,14 @@
     "cron_enabled_label": "Habilitado"
   },
   "admin": {
+    "audit": {
+      "title": "Registro do sistema e segurança",
+      "description": "Somente ações administrativas e erros do servidor; conteúdo privado e histórico de acesso aos cofres não são exibidos.",
+      "time": "Data",
+      "action": "Operação",
+      "status": "Status",
+      "request_id": "ID da solicitação"
+    },
     "tab_users": "Usuários",
     "tab_settings": "Configurações",
     "tab_backups": "Backups",
@@ -1726,6 +1765,16 @@
     },
     "users": {
       "title": "Gerenciamento de Usuários",
+      "create": "Criar usuário",
+      "create_hint": "Uma conta privada será criada. O usuário escolherá a própria senha por um link de uso único. Configure o SMTP antes; nenhum acesso a cofres será concedido.",
+      "created_email": "Usuário criado; e-mail de definição de senha enviado",
+      "first_name": "Nome",
+      "last_name": "Sobrenome",
+      "reset_password": "Enviar redefinição de senha",
+      "reset_sent": "E-mail de redefinição enviado",
+      "edit_identity": "Editar identidade",
+      "email_confirmation_hint": "A alteração de e-mail exige confirmação nas caixas antiga e nova. A senha e os acessos aos cofres permanecem.",
+      "email_confirmation_sent": "Links de confirmação enviados aos dois endereços",
       "description": "Gerencie todos os usuários registrados nesta instância",
       "name": "Nome",
       "email": "E-mail",

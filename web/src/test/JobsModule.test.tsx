@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import JobsModule from "@/pages/contact/modules/JobsModule";
+import { matchesCompanyName } from "@/utils/companyMatch";
 
 const apiMocks = vi.hoisted(() => ({
   companiesList: vi.fn(),
@@ -48,6 +49,11 @@ function renderModule() {
 }
 
 describe("JobsModule inline company creation", () => {
+  it("suggests near-matching existing companies without unrelated results", () => {
+    expect(matchesCompanyName("Microsft", "Microsoft Corporation")).toBe(true);
+    expect(matchesCompanyName("cafe", "Café Central")).toBe(true);
+    expect(matchesCompanyName("Microsft", "Other Business")).toBe(false);
+  });
   beforeEach(() => {
     apiMocks.companiesList.mockReset();
     apiMocks.companiesCreate.mockReset();

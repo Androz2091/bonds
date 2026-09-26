@@ -12,6 +12,13 @@ function gitVersion(): string {
   }
 }
 
+const apiProxy = {
+  "/api": {
+    target: `http://localhost:${process.env.PLAYWRIGHT_SERVER_PORT ?? "8080"}`,
+    changeOrigin: true,
+  },
+};
+
 export default defineConfig({
   plugins: [react()],
   define: {
@@ -24,12 +31,10 @@ export default defineConfig({
   },
   server: {
     allowedHosts: true,
-    proxy: {
-      "/api": {
-        target: `http://localhost:${process.env.PLAYWRIGHT_SERVER_PORT ?? "8080"}`,
-        changeOrigin: true,
-      },
-    },
+    proxy: apiProxy,
+  },
+  preview: {
+    proxy: apiProxy,
   },
   test: {
     globals: true,

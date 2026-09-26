@@ -19,6 +19,16 @@ type RefreshRequest struct {
 	Token string `json:"token" validate:"required" example:"eyJhbGciOiJIUzI1NiIs..."`
 }
 
+type SwitchAccountRequest struct {
+	AccountID string `json:"account_id" validate:"required,uuid"`
+}
+
+type AccountMembershipResponse struct {
+	AccountID string `json:"account_id"`
+	IsAdmin   bool   `json:"is_admin"`
+	IsHome    bool   `json:"is_home"`
+}
+
 type AuthResponse struct {
 	Token             string       `json:"token" example:"eyJhbGciOiJIUzI1NiIs..."`
 	ExpiresAt         time.Time    `json:"expires_at" example:"2026-01-15T10:30:00Z"`

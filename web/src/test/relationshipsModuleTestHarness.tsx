@@ -120,6 +120,7 @@ vi.mock("@/api", () => ({
       contactsList: hoistedMocks.apiMock.contactsList,
     },
     relationshipTypes: {
+      relationshipTypesList: hoistedMocks.apiMock.personalizeRelationshipTypesAllList,
       personalizeRelationshipTypesAllList:
         hoistedMocks.apiMock.personalizeRelationshipTypesAllList,
     },

@@ -23,7 +23,7 @@ vi.mock("@/api", () => ({
       contactsContactInformationUpdate: vi.fn(),
       contactsContactInformationDelete: vi.fn(),
     },
-    personalize: { personalizeDetail: vi.fn() },
+    personalize: { personalizeDetail2: vi.fn() },
     pets: {
       contactsPetsList: vi.fn(),
       contactsPetsCreate: vi.fn(),
@@ -77,7 +77,7 @@ beforeEach(() => {
   ).mockResolvedValue({
     data: [{ id: 2, type_id: 4, kind: "Personal", data: "alice@example.com" }],
   });
-  vi.mocked(api.personalize.personalizeDetail).mockResolvedValue({
+  vi.mocked(api.personalize.personalizeDetail2).mockResolvedValue({
     data: [{ id: 4, name: "Email" }],
   });
   vi.mocked(api.pets.contactsPetsList).mockResolvedValue({

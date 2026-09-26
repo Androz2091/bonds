@@ -96,7 +96,7 @@ func (h *PostPhotoHandler) Upload(c *echo.Context) error {
 	}
 
 	// 检查账户存储配额。limit_bytes=0 表示无限制。
-	accountID := middleware.GetAccountID(c)
+	accountID := middleware.GetVaultAccountID(c)
 	storageInfo, sErr := h.storageInfoService.Get(accountID)
 	if sErr == nil && storageInfo.LimitBytes > 0 {
 		if storageInfo.UsedBytes+fileHeader.Size > storageInfo.LimitBytes {

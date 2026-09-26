@@ -50,6 +50,9 @@ func (h *AccountCancelHandler) Cancel(c *echo.Context) error {
 		if errors.Is(err, services.ErrUserNotFound) {
 			return response.NotFound(c, "err.user_not_found")
 		}
+		if errors.Is(err, services.ErrAccountHasExternalVaultMembers) {
+			return response.Conflict(c, "err.account_has_external_vault_members")
+		}
 		return response.InternalError(c, "err.failed_to_cancel_account")
 	}
 	return response.NoContent(c)

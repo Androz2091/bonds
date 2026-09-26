@@ -10,6 +10,8 @@ import {
   Spin,
   Segmented,
   InputNumber,
+  Form,
+  Input,
   Modal,
 } from "antd";
 import {
@@ -28,6 +30,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/api";
 import type { AdminUser, APIError, PaginationMeta } from "@/api";
+import type { GithubComNaibaBondsInternalDtoAuditEventResponse as AuditEvent } from "@/api/generated/data-contracts";
 import { useAuth } from "@/stores/auth";
 import { filesize } from "filesize";
 import type { ColumnsType } from "antd/es/table";
@@ -37,6 +40,63 @@ import { useState } from "react";
 import { usePagination } from "@/hooks/usePagination";
 
 const { Title, Text } = Typography;
+
+type AdminIdentityValues = {
+  first_name: string;
+  last_name: string;
+  email: string;
+};
+
+function EditAdminIdentityForm({
+  user,
+  saving,
+  onSave,
+  onCancel,
+}: {
+  user: AdminUser;
+  saving: boolean;
+  onSave: (values: AdminIdentityValues) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const { t } = useTranslation();
+  const [form] = Form.useForm<AdminIdentityValues>();
+  return (
+    <Form
+      form={form}
+      layout="vertical"
+      initialValues={{
+        first_name: user.first_name,
+        last_name: user.last_name,
+        email: user.email,
+      }}
+      onFinish={onSave}
+    >
+      <Form.Item
+        label={t("admin.users.first_name")}
+        name="first_name"
+        rules={[{ required: true }]}
+      >
+        <Input />
+      </Form.Item>
+      <Form.Item label={t("admin.users.last_name")} name="last_name">
+        <Input />
+      </Form.Item>
+      <Form.Item
+        label={t("admin.users.email")}
+        name="email"
+        rules={[{ required: true, type: "email" }]}
+      >
+        <Input />
+      </Form.Item>
+      <Space style={{ display: "flex", justifyContent: "flex-end" }}>
+        <Button onClick={onCancel}>{t("common.cancel")}</Button>
+        <Button type="primary" htmlType="submit" loading={saving}>
+          {t("common.save")}
+        </Button>
+      </Space>
+    </Form>
+  );
+}
 
 export default function AdminUsers() {
   const { t } = useTranslation();
@@ -49,8 +109,29 @@ export default function AdminUsers() {
   const pagination = usePagination();
   const qk = ["admin", "users", pagination.page, pagination.pageSize];
   const invalidateKey = ["admin", "users"];
-  const [storageLimitModalUser, setStorageLimitModalUser] = useState<AdminUser | null>(null);
+  const [storageLimitModalUser, setStorageLimitModalUser] =
+    useState<AdminUser | null>(null);
   const [storageLimitValue, setStorageLimitValue] = useState<number>(0);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createForm] = Form.useForm();
+  const [editUser, setEditUser] = useState<AdminUser | null>(null);
+  const [auditPage, setAuditPage] = useState(1);
+  const { data: auditResponse, isLoading: auditLoading } = useQuery({
+    queryKey: ["admin", "audit", auditPage],
+    queryFn: async (): Promise<{
+      events: AuditEvent[];
+      meta?: PaginationMeta;
+    }> => {
+      const result = await api.admin.auditList({
+        page: auditPage,
+        per_page: 25,
+      });
+      return {
+        events: result.data ?? [],
+        meta: result.meta as PaginationMeta | undefined,
+      };
+    },
+  });
 
   const { data: usersResponse, isLoading } = useQuery({
     queryKey: qk,
@@ -111,7 +192,10 @@ export default function AdminUsers() {
           ...oldData,
           users,
           meta: oldData.meta
-            ? { ...oldData.meta, total: Math.max(0, (oldData.meta.total ?? users.length) - 1) }
+            ? {
+                ...oldData.meta,
+                total: Math.max(0, (oldData.meta.total ?? users.length) - 1),
+              }
             : oldData.meta,
         };
       });
@@ -122,14 +206,60 @@ export default function AdminUsers() {
   });
 
   const storageLimitMutation = useMutation({
-    mutationFn: ({ id, storage_limit_in_mb }: { id: string; storage_limit_in_mb: number }) =>
-      api.admin.usersStorageLimitUpdate(id, { storage_limit_in_mb }),
+    mutationFn: ({
+      id,
+      storage_limit_in_mb,
+    }: {
+      id: string;
+      storage_limit_in_mb: number;
+    }) => api.admin.usersStorageLimitUpdate(id, { storage_limit_in_mb }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: invalidateKey });
       message.success(t("admin.users.storage_limit_updated"));
       setStorageLimitModalUser(null);
     },
     onError: (e: APIError) => message.error(e.message),
+  });
+  const createMutation = useMutation({
+    mutationFn: (values: {
+      email: string;
+      first_name: string;
+      last_name?: string;
+    }) => api.admin.usersCreate(values),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: invalidateKey });
+      setCreateOpen(false);
+      createForm.resetFields();
+      message.success(t("admin.users.created_email"));
+    },
+    onError: (error: APIError) => message.error(error.message),
+  });
+  const resetPasswordMutation = useMutation({
+    mutationFn: (id: string) => api.admin.usersResetPasswordCreate(id),
+    onSuccess: () => message.success(t("admin.users.reset_sent")),
+    onError: (error: APIError) => message.error(error.message),
+  });
+  const identityMutation = useMutation({
+    mutationFn: (input: {
+      id: string;
+      first_name: string;
+      last_name: string;
+    }) =>
+      api.admin.usersIdentityUpdate(input.id, {
+        first_name: input.first_name,
+        last_name: input.last_name,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: invalidateKey });
+      message.success(t("common.saved"));
+    },
+    onError: (error: APIError) => message.error(error.message),
+  });
+  const emailMutation = useMutation({
+    mutationFn: (input: { id: string; email: string }) =>
+      api.admin.usersEmailChangeCreate(input.id, { email: input.email }),
+    onSuccess: () => message.success(t("admin.users.email_confirmation_sent")),
+    onError: (error: APIError) => message.error(error.message),
   });
 
   const columns: ColumnsType<AdminUser> = [
@@ -145,31 +275,19 @@ export default function AdminUsers() {
       key: "email",
     },
     {
-      title: t("admin.users.contacts"),
-      dataIndex: "contact_count",
-      key: "contact_count",
-      width: 100,
-      render: (v: number) => v ?? 0,
-    },
-    {
-      title: t("admin.users.vaults"),
-      dataIndex: "vault_count",
-      key: "vault_count",
-      width: 80,
-      render: (v: number) => v ?? 0,
-    },
-    {
       title: t("admin.users.storage"),
       key: "storage",
       width: 160,
       render: (_: unknown, record: AdminUser) => {
-        const used = record.storage_used ? (filesize(record.storage_used, { standard: "jedec" }) as string) : "0 B";
         const limitMB = record.storage_limit_in_mb ?? 0;
         // storage_limit_in_mb=0 表示使用实例默认限制
-        const limitStr = limitMB > 0 ? (filesize(limitMB * 1024 * 1024, { standard: "jedec" }) as string) : t("admin.users.instance_default");
+        const limitStr =
+          limitMB > 0
+            ? (filesize(limitMB * 1024 * 1024, { standard: "jedec" }) as string)
+            : t("admin.users.instance_default");
         return (
           <Space direction="vertical" size={0}>
-            <span>{used} / {limitStr}</span>
+            <span>{limitStr}</span>
             <Button
               type="link"
               size="small"
@@ -230,12 +348,24 @@ export default function AdminUsers() {
                 <Button
                   type="text"
                   size="small"
+                  onClick={() => setEditUser(record)}
+                >
+                  {t("common.edit")}
+                </Button>
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={() =>
+                    record.id && resetPasswordMutation.mutate(record.id)
+                  }
+                >
+                  {t("admin.users.reset_password")}
+                </Button>
+                <Button
+                  type="text"
+                  size="small"
                   icon={
-                    record.disabled ? (
-                      <CheckCircleOutlined />
-                    ) : (
-                      <StopOutlined />
-                    )
+                    record.disabled ? <CheckCircleOutlined /> : <StopOutlined />
                   }
                   onClick={() =>
                     toggleMutation.mutate({
@@ -301,10 +431,26 @@ export default function AdminUsers() {
           if (val === "oauth-providers") navigate("/admin/oauth-providers");
         }}
         options={[
-          { label: t("admin.tab_users"), value: "users", icon: <TeamOutlined /> },
-          { label: t("admin.tab_settings"), value: "settings", icon: <SettingOutlined /> },
-          { label: t("admin.tab_backups"), value: "backups", icon: <DatabaseOutlined /> },
-          { label: t("admin.tab_oauth"), value: "oauth-providers", icon: <KeyOutlined /> },
+          {
+            label: t("admin.tab_users"),
+            value: "users",
+            icon: <TeamOutlined />,
+          },
+          {
+            label: t("admin.tab_settings"),
+            value: "settings",
+            icon: <SettingOutlined />,
+          },
+          {
+            label: t("admin.tab_backups"),
+            value: "backups",
+            icon: <DatabaseOutlined />,
+          },
+          {
+            label: t("admin.tab_oauth"),
+            value: "oauth-providers",
+            icon: <KeyOutlined />,
+          },
         ]}
         style={{ marginBottom: 24 }}
       />
@@ -315,7 +461,95 @@ export default function AdminUsers() {
           {t("admin.users.title")}
         </Title>
         <Text type="secondary">{t("admin.users.description")}</Text>
+        <Button
+          type="primary"
+          onClick={() => setCreateOpen(true)}
+          style={{ marginLeft: 16 }}
+        >
+          {t("admin.users.create")}
+        </Button>
       </div>
+
+      <Modal
+        title={t("admin.users.create")}
+        open={createOpen}
+        onCancel={() => setCreateOpen(false)}
+        onOk={() => createForm.submit()}
+        confirmLoading={createMutation.isPending}
+      >
+        <Typography.Paragraph type="secondary">
+          {t("admin.users.create_hint")}
+        </Typography.Paragraph>
+        <Form
+          form={createForm}
+          layout="vertical"
+          onFinish={(values: {
+            email: string;
+            first_name: string;
+            last_name?: string;
+          }) => createMutation.mutate(values)}
+        >
+          <Form.Item
+            label={t("admin.users.email")}
+            name="email"
+            rules={[{ required: true, type: "email" }]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item
+            label={t("admin.users.first_name")}
+            name="first_name"
+            rules={[{ required: true }]}
+          >
+            <Input />
+          </Form.Item>
+          <Form.Item label={t("admin.users.last_name")} name="last_name">
+            <Input />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={t("admin.users.edit_identity")}
+        open={!!editUser}
+        onCancel={() => setEditUser(null)}
+        footer={null}
+        destroyOnHidden
+      >
+        <Typography.Paragraph type="secondary">
+          {t("admin.users.email_confirmation_hint")}
+        </Typography.Paragraph>
+        {editUser?.id && (
+          <EditAdminIdentityForm
+            key={editUser.id}
+            user={editUser}
+            saving={identityMutation.isPending || emailMutation.isPending}
+            onCancel={() => setEditUser(null)}
+            onSave={async (values) => {
+              if (!editUser?.id) return;
+              try {
+                await identityMutation.mutateAsync({
+                  id: editUser.id,
+                  first_name: values.first_name,
+                  last_name: values.last_name,
+                });
+                if (
+                  values.email.trim().toLowerCase() !==
+                  editUser.email?.toLowerCase()
+                ) {
+                  await emailMutation.mutateAsync({
+                    id: editUser.id,
+                    email: values.email,
+                  });
+                }
+                setEditUser(null);
+              } catch {
+                return;
+              }
+            }}
+          />
+        )}
+      </Modal>
 
       <Card>
         <Table
@@ -332,6 +566,42 @@ export default function AdminUsers() {
           }}
           size="small"
           scroll={{ x: 900 }}
+        />
+      </Card>
+
+      <Card title={t("admin.audit.title")} style={{ marginTop: 24 }}>
+        <Text type="secondary">{t("admin.audit.description")}</Text>
+        <Table<AuditEvent>
+          style={{ marginTop: 16 }}
+          dataSource={auditResponse?.events ?? []}
+          rowKey="id"
+          loading={auditLoading}
+          columns={[
+            {
+              title: t("admin.audit.time"),
+              dataIndex: "created_at",
+              render: (value: string) => formatDate(value, dateFormats),
+            },
+            {
+              title: t("admin.audit.action"),
+              key: "action",
+              render: (_, row) => `${row.method} ${row.route}`,
+            },
+            { title: t("admin.audit.status"), dataIndex: "status" },
+            {
+              title: t("admin.audit.request_id"),
+              dataIndex: "request_id",
+              ellipsis: true,
+            },
+          ]}
+          pagination={{
+            current: auditPage,
+            pageSize: 25,
+            total: auditResponse?.meta?.total ?? 0,
+            onChange: setAuditPage,
+          }}
+          size="small"
+          scroll={{ x: 700 }}
         />
       </Card>
 

@@ -127,10 +127,10 @@ export default function CallsModule({
 
   const { data: callReasonGroups = [], isLoading: callReasonsLoading } =
     useQuery({
-      queryKey: ["personalize", "call-reasons", "call-options"],
+      queryKey: ["vaults", vaultId, "personalize", "call-reasons", "call-options"],
       queryFn: async () => {
         const typesResponse =
-          await api.personalize.personalizeDetail("call-reasons");
+          await api.personalize.personalizeDetail2(String(vaultId), "call-reasons");
         const types = (typesResponse.data ?? []) as PersonalizeItem[];
         return Promise.all(
           types.flatMap((type) =>
@@ -138,7 +138,7 @@ export default function CallsModule({
               ? []
               : [
                   api.callReasons
-                    .personalizeCallReasonsReasonsList(type.id)
+                    .callReasonTypesReasonsList(String(vaultId), type.id)
                     .then((response) => ({
                       label: type.name || type.label || "",
                       options: ((response.data ?? []) as CallReason[]).flatMap(

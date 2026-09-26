@@ -49,6 +49,7 @@
     "view_release": "View release"
   },
   "nav": {
+    "accounts": "Switch account",
     "vaults": "Vaults",
     "settings": "Settings",
     "vault": "Vault",
@@ -660,6 +661,7 @@
       "sort_first_met": "First met",
       "sort_updated": "Last updated",
       "filter_label": "Filter by label",
+      "filter_company": "Filter by company",
       "all_labels": "All labels",
       "filter_group": "Filter by group",
       "all_groups": "All groups",
@@ -1463,6 +1465,7 @@
     "invite": "Invite User",
     "email": "Email Address",
     "permission": "Permission",
+    "account_member": "Account member (no vault access)",
     "permission.manager": "Manager",
     "permission.editor": "Editor",
     "permission.viewer": "Viewer",
@@ -1473,9 +1476,32 @@
     "delete": "Cancel Invitation",
     "deleteConfirm": "Cancel this invitation?"
   },
+  "emailChange": {
+    "title": "Confirm email change",
+    "confirm": "Confirm this email address",
+    "done": "Confirmed. The email address changes only after both the old and new inboxes have confirmed. Then sign in with the new address.",
+    "login": "Go to login"
+  },
+  "setPassword": {
+    "title": "Set your password",
+    "password": "New password",
+    "confirm": "Confirm password",
+    "mismatch": "Passwords do not match",
+    "submit": "Save password",
+    "success": "Password updated. Please sign in.",
+    "invalid": "This link is invalid or has expired. Ask an administrator to send a new one."
+  },
   "acceptInvite": {
     "title": "Accept Invitation",
-    "subtitle": "You've been invited to join. Create your account to get started.",
+    "subtitle": "Accept with your existing account, or create an account if you are new.",
+    "vaultScope": "Invitation to one vault",
+    "accountScope": "Invitation to an account (no automatic vault access)",
+    "invalid": "This invitation is invalid or has expired.",
+    "signedInAs": "Signed in as {{email}}",
+    "acceptExisting": "Accept with this account",
+    "switchUser": "Sign in with a different account",
+    "haveAccount": "Already have an account? Sign in",
+    "accepted": "Invitation accepted",
     "submit": "Create Account",
     "firstName": "First Name",
     "lastName": "Last Name",
@@ -1543,6 +1569,11 @@
     "users": "Users",
     "default_template": "Default Template",
     "add_category": "Add Category",
+    "life_presets_title": "Life milestones",
+    "life_presets_description": "Add optional milestone activity categories to this vault. Existing activities are untouched.",
+    "life_presets_confirm": "Install missing life milestone types? Previously deleted types may be restored.",
+    "life_presets_install": "Install milestone types",
+    "life_presets_installed": "Life milestone types are available",
     "add_type": "Add Type",
     "add_user": "Add User",
     "hex_color": "Hex Color",
@@ -1687,6 +1718,14 @@
     "cron_enabled_label": "Enabled"
   },
   "admin": {
+    "audit": {
+      "title": "System and security log",
+      "description": "Administrative actions and server errors only; private vault content and access history are excluded.",
+      "time": "Time",
+      "action": "Operation",
+      "status": "Status",
+      "request_id": "Request ID"
+    },
     "tab_users": "Users",
     "tab_settings": "Settings",
     "tab_backups": "Backups",
@@ -1726,6 +1765,16 @@
     },
     "users": {
       "title": "User Management",
+      "create": "Create user",
+      "create_hint": "A private account will be created. The user receives a one-time email link to choose their own password. Configure SMTP first; this does not grant vault access.",
+      "created_email": "User created; password setup email sent",
+      "first_name": "First name",
+      "last_name": "Last name",
+      "reset_password": "Send password reset",
+      "reset_sent": "Password reset email sent to the user",
+      "edit_identity": "Edit user identity",
+      "email_confirmation_hint": "Changing email requires confirmation from both the current and new inbox. Password and vault access stay with the same user.",
+      "email_confirmation_sent": "Confirmation links sent to both addresses",
       "description": "Manage all registered users on this instance",
       "name": "Name",
       "email": "Email",

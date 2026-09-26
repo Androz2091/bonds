@@ -506,7 +506,12 @@ export default function ActivitiesModule({
             label={t("modules.activities.type")}
             rules={[{ required: true }]}
           >
-            <Select showSearch options={typeOptions} optionFilterProp="label" />
+            <Select showSearch options={typeOptions} optionFilterProp="label"
+              onChange={(value: number) => {
+                if (editing || form.getFieldValue("title")) return;
+                const chosen = categories.flatMap((category) => category.types ?? []).find((type) => type.id === value);
+                if (chosen?.label) form.setFieldValue("title", chosen.label);
+              }} />
           </Form.Item>
           <Form.Item
             name="participant_ids"

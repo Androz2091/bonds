@@ -49,6 +49,7 @@
     "view_release": "Ver versão"
   },
   "nav": {
+    "accounts": "Mudar de conta",
     "vaults": "Cofres",
     "settings": "Definições",
     "vault": "Cofre",
@@ -660,6 +661,7 @@
       "sort_first_met": "Primeiro encontro",
       "sort_updated": "Última atualização",
       "filter_label": "Filtrar por etiqueta",
+      "filter_company": "Filtrar por empresa",
       "all_labels": "Todas as etiquetas",
       "filter_group": "Filtrar por grupo",
       "all_groups": "Todos os grupos",
@@ -1463,6 +1465,7 @@
     "invite": "Convidar Utilizador",
     "email": "Endereço de E-mail",
     "permission": "Permissão",
+    "account_member": "Membro da conta (sem acesso aos cofres)",
     "permission.manager": "Gestor",
     "permission.editor": "Editor",
     "permission.viewer": "Visualizador",
@@ -1473,7 +1476,30 @@
     "delete": "Cancelar Convite",
     "deleteConfirm": "Cancelar este convite?"
   },
+  "emailChange": {
+    "title": "Confirmar alteração do e-mail",
+    "confirm": "Confirmar este endereço",
+    "done": "Confirmado. O endereço só será alterado após a confirmação nas caixas de correio antiga e nova. Depois, inicie sessão com o novo endereço.",
+    "login": "Ir para o início de sessão"
+  },
+  "setPassword": {
+    "title": "Definir palavra-passe",
+    "password": "Nova palavra-passe",
+    "confirm": "Confirmar palavra-passe",
+    "mismatch": "As palavras-passe não coincidem",
+    "submit": "Guardar palavra-passe",
+    "success": "Palavra-passe atualizada. Inicie sessão.",
+    "invalid": "Esta ligação é inválida ou expirou. Peça uma nova a um administrador."
+  },
   "acceptInvite": {
+    "vaultScope": "Convite para um cofre",
+    "accountScope": "Convite para uma conta (sem acesso automático aos cofres)",
+    "invalid": "Este convite é inválido ou expirou.",
+    "signedInAs": "Sessão iniciada como {{email}}",
+    "acceptExisting": "Aceitar com esta conta",
+    "switchUser": "Iniciar sessão com outra conta",
+    "haveAccount": "Já tem uma conta? Inicie sessão",
+    "accepted": "Convite aceite",
     "title": "Aceitar Convite",
     "subtitle": "Foi convidado a participar. Crie a sua conta para começar.",
     "submit": "Criar Conta",
@@ -1543,6 +1569,11 @@
     "users": "Utilizadores",
     "default_template": "Modelo Predefinido",
     "add_category": "Adicionar Categoria",
+    "life_presets_title": "Eventos de vida",
+    "life_presets_description": "Adicione categorias opcionais de eventos de vida a este cofre. As atividades existentes não serão alteradas.",
+    "life_presets_confirm": "Instalar os tipos em falta? Os tipos removidos anteriormente podem voltar a aparecer.",
+    "life_presets_install": "Instalar tipos de eventos",
+    "life_presets_installed": "Tipos de eventos disponíveis",
     "add_type": "Adicionar Tipo",
     "add_user": "Adicionar Utilizador",
     "hex_color": "Cor Hex",
@@ -1687,6 +1718,14 @@
     "cron_enabled_label": "Ativado"
   },
   "admin": {
+    "audit": {
+      "title": "Registo do sistema e segurança",
+      "description": "Apenas ações administrativas e erros do servidor; conteúdos privados e histórico de acesso aos cofres estão excluídos.",
+      "time": "Data",
+      "action": "Operação",
+      "status": "Estado",
+      "request_id": "ID do pedido"
+    },
     "tab_users": "Utilizadores",
     "tab_settings": "Definições",
     "tab_backups": "Cópias de Segurança",
@@ -1726,6 +1765,16 @@
     },
     "users": {
       "title": "Gestão de Utilizadores",
+      "create": "Criar utilizador",
+      "create_hint": "Será criada uma conta privada. O utilizador escolherá a sua palavra-passe através de uma ligação de utilização única. Configure o SMTP primeiro; não será dado acesso a cofres.",
+      "created_email": "Utilizador criado; e-mail de configuração da palavra-passe enviado",
+      "first_name": "Nome próprio",
+      "last_name": "Apelido",
+      "reset_password": "Enviar reposição de palavra-passe",
+      "reset_sent": "E-mail de reposição enviado",
+      "edit_identity": "Editar identidade",
+      "email_confirmation_hint": "A alteração do e-mail requer confirmação nas caixas antiga e nova. A palavra-passe e os acessos aos cofres mantêm-se.",
+      "email_confirmation_sent": "Ligações de confirmação enviadas para ambos os endereços",
       "description": "Gerir todos os utilizadores registados nesta instância",
       "name": "Nome",
       "email": "E-mail",

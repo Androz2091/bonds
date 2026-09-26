@@ -138,7 +138,7 @@ export default function Login() {
           navigate(from, { replace: true });
           return;
         case "two_factor_required":
-          navigate("/login/2fa", { replace: true });
+          navigate("/login/2fa", { replace: true, state: { redirect: from } });
           return;
         case "stale":
           return;

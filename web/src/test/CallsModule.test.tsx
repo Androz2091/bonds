@@ -14,8 +14,8 @@ vi.mock("@/api", () => ({
       contactsCallsUpdate: vi.fn(),
       contactsCallsDelete: vi.fn(),
     },
-    personalize: { personalizeDetail: vi.fn() },
-    callReasons: { personalizeCallReasonsReasonsList: vi.fn() },
+    personalize: { personalizeDetail2: vi.fn() },
+    callReasons: { callReasonTypesReasonsList: vi.fn() },
     preferences: { preferencesList: vi.fn() },
   },
 }));
@@ -46,11 +46,11 @@ beforeEach(() => {
   vi.mocked(api.calls.contactsCallsUpdate).mockResolvedValue({
     data: { id: 11 },
   });
-  vi.mocked(api.personalize.personalizeDetail).mockResolvedValue({
+  vi.mocked(api.personalize.personalizeDetail2).mockResolvedValue({
     data: [{ id: 2, name: "Personal" }],
   });
   vi.mocked(
-    api.callReasons.personalizeCallReasonsReasonsList,
+    api.callReasons.callReasonTypesReasonsList,
   ).mockResolvedValue({
     data: [{ id: 5, call_reason_type_id: 2, label: "Just to say hello" }],
   });
