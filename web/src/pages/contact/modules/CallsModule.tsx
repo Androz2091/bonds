@@ -484,11 +484,7 @@ export default function CallsModule({
             label={t("modules.calls.date_time")}
             rules={[{ required: true }]}
           >
-            <DatePicker
-              showTime
-              getPopupContainer={(trigger) => trigger.parentElement ?? document.body}
-              style={{ width: "100%" }}
-            />
+            <DatePicker showTime style={{ width: "100%" }} />
           </Form.Item>
           <Form.Item
             name="type"

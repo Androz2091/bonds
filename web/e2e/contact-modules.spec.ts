@@ -381,17 +381,9 @@ test.describe("Contact Modules - Calls", () => {
     const modal = page.locator(".ant-modal").filter({ hasText: /log a call/i });
     await expect(modal).toBeVisible({ timeout: 5000 });
 
-    await modal.locator(".ant-picker").click();
-    const dateCell = page.locator(
-      ".ant-picker-dropdown:visible .ant-picker-cell-today .ant-picker-cell-inner",
-    );
-    await dateCell.click();
-    const timeOk = page.locator(
-      ".ant-picker-dropdown:visible .ant-picker-ok button",
-    );
-    if (await timeOk.isVisible().catch(() => false)) {
-      await timeOk.click();
-    }
+    const dateInput = modal.locator(".ant-picker-input input");
+    await dateInput.fill("2026-04-10 09:30:00");
+    await dateInput.press("Enter");
 
     await modal.locator(".ant-select").first().click();
     await page
