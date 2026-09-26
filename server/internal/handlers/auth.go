@@ -3,7 +3,7 @@ package handlers
 import (
 	"errors"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/middleware"
 	"github.com/naiba/bonds/internal/services"
@@ -33,7 +33,7 @@ func NewAuthHandler(authService *services.AuthService, settingService *services.
 //	@Failure		422		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
 //	@Router			/auth/register [post]
-func (h *AuthHandler) Register(c echo.Context) error {
+func (h *AuthHandler) Register(c *echo.Context) error {
 	var req dto.RegisterRequest
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
@@ -71,7 +71,7 @@ func (h *AuthHandler) Register(c echo.Context) error {
 //	@Failure		422		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
 //	@Router			/auth/login [post]
-func (h *AuthHandler) Login(c echo.Context) error {
+func (h *AuthHandler) Login(c *echo.Context) error {
 	var req dto.LoginRequest
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
@@ -109,7 +109,7 @@ func (h *AuthHandler) Login(c echo.Context) error {
 //	@Failure		401	{object}	response.APIResponse
 //	@Failure		500	{object}	response.APIResponse
 //	@Router			/auth/refresh [post]
-func (h *AuthHandler) Refresh(c echo.Context) error {
+func (h *AuthHandler) Refresh(c *echo.Context) error {
 	claims := middleware.GetClaims(c)
 	if claims == nil {
 		return response.Unauthorized(c, "err.invalid_token")
@@ -141,7 +141,7 @@ func (h *AuthHandler) Refresh(c echo.Context) error {
 //	@Failure		404	{object}	response.APIResponse
 //	@Failure		500	{object}	response.APIResponse
 //	@Router			/auth/me [get]
-func (h *AuthHandler) Me(c echo.Context) error {
+func (h *AuthHandler) Me(c *echo.Context) error {
 	userID := middleware.GetUserID(c)
 	if userID == "" {
 		return response.Unauthorized(c, "err.invalid_user")
@@ -155,7 +155,52 @@ func (h *AuthHandler) Me(c echo.Context) error {
 		return response.InternalError(c, "err.failed_to_get_user")
 	}
 
+	user.AccountID = middleware.GetAccountID(c)
+	if isAdmin, ok := c.Get("is_admin").(bool); ok {
+		user.IsAdmin = isAdmin
+	}
 	return response.OK(c, user)
+}
+
+// ListAccounts godoc
+//
+//	@Summary	List the current user's account memberships
+//	@Tags	auth
+//	@Security	BearerAuth
+//	@Success	200	{object}	response.APIResponse{data=[]dto.AccountMembershipResponse}
+//	@Router	/auth/accounts [get]
+func (h *AuthHandler) ListAccounts(c *echo.Context) error {
+	accounts, err := h.authService.ListAccounts(middleware.GetUserID(c))
+	if err != nil {
+		return response.InternalError(c, "err.failed_to_get_user")
+	}
+	return response.OK(c, accounts)
+}
+
+// SwitchAccount godoc
+//
+//	@Summary	Switch the current account without changing user credentials
+//	@Tags	auth
+//	@Security	BearerAuth
+//	@Param	request	body	dto.SwitchAccountRequest	true	"Target account"
+//	@Success	200	{object}	response.APIResponse{data=dto.AuthResponse}
+//	@Router	/auth/switch-account [post]
+func (h *AuthHandler) SwitchAccount(c *echo.Context) error {
+	var req dto.SwitchAccountRequest
+	if err := c.Bind(&req); err != nil {
+		return response.BadRequest(c, "err.invalid_request_body", nil)
+	}
+	if err := validateRequest(req); err != nil {
+		return response.ValidationError(c, map[string]string{"validation": err.Error()})
+	}
+	result, err := h.authService.SwitchAccount(middleware.GetUserID(c), req.AccountID)
+	if err != nil {
+		if errors.Is(err, services.ErrUserNotFound) {
+			return response.Forbidden(c, "err.administrator_access_required")
+		}
+		return response.InternalError(c, "err.failed_to_get_user")
+	}
+	return response.OK(c, result)
 }
 
 // VerifyEmail godoc
@@ -170,7 +215,7 @@ func (h *AuthHandler) Me(c echo.Context) error {
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		404		{object}	response.APIResponse
 //	@Router			/auth/verify-email [post]
-func (h *AuthHandler) VerifyEmail(c echo.Context) error {
+func (h *AuthHandler) VerifyEmail(c *echo.Context) error {
 	var req dto.VerifyEmailRequest
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
@@ -205,7 +250,7 @@ func (h *AuthHandler) VerifyEmail(c echo.Context) error {
 //	@Failure		400	{object}	response.APIResponse
 //	@Failure		401	{object}	response.APIResponse
 //	@Router			/auth/resend-verification [post]
-func (h *AuthHandler) ResendVerification(c echo.Context) error {
+func (h *AuthHandler) ResendVerification(c *echo.Context) error {
 	userID := middleware.GetUserID(c)
 	if err := h.authService.ResendVerification(userID); err != nil {
 		if errors.Is(err, services.ErrEmailAlreadyVerified) {
@@ -230,7 +275,7 @@ func (h *AuthHandler) ResendVerification(c echo.Context) error {
 //	@Failure		422		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
 //	@Router			/auth/2fa/verify [post]
-func (h *AuthHandler) VerifyTwoFactor(c echo.Context) error {
+func (h *AuthHandler) VerifyTwoFactor(c *echo.Context) error {
 	var req dto.TwoFactorLoginVerifyRequest
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)

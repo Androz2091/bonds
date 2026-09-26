@@ -1,8 +1,12 @@
 package services
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/naiba/bonds/internal/config"
@@ -10,6 +14,7 @@ import (
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/models"
 	"github.com/naiba/bonds/internal/testutil"
+	"gorm.io/gorm"
 )
 
 func setupAdminTest(t *testing.T) (*AdminService, *AuthService, *VaultService) {
@@ -90,7 +95,7 @@ func TestAdminListUsers_Pagination(t *testing.T) {
 	}
 }
 
-func TestAdminListUsers_WithStats(t *testing.T) {
+func TestAdminListUsers_DoesNotExposePrivateUsage(t *testing.T) {
 	adminSvc, authSvc, vaultSvc := setupAdminTest(t)
 
 	resp := registerTestUser(t, authSvc, "stats-user@example.com")
@@ -117,11 +122,14 @@ func TestAdminListUsers_WithStats(t *testing.T) {
 	if len(users) != 1 {
 		t.Fatalf("expected 1 user, got %d", len(users))
 	}
-	if users[0].ContactCount != 2 {
-		t.Errorf("expected contact count 2, got %d", users[0].ContactCount)
+	encoded, err := json.Marshal(users[0])
+	if err != nil {
+		t.Fatal(err)
 	}
-	if users[0].VaultCount != 1 {
-		t.Errorf("expected vault count 1, got %d", users[0].VaultCount)
+	for _, field := range []string{"contact_count", "vault_count", "storage_used"} {
+		if strings.Contains(string(encoded), field) {
+			t.Errorf("admin API exposes private usage field %s", field)
+		}
 	}
 }
 
@@ -299,6 +307,53 @@ func TestAdminDeleteUser_Success(t *testing.T) {
 	}
 }
 
+func TestAdminDeleteUser_RemovesPhysicalFilesAfterCommit(t *testing.T) {
+	tmpDir := t.TempDir()
+	uploadDir := filepath.Join(tmpDir, "uploads")
+	db, err := database.Connect(&config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(tmpDir, "bonds.db")}, false)
+	if err != nil {
+		t.Fatalf("Connect failed: %v", err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("AutoMigrate failed: %v", err)
+	}
+	adminSvc := NewAdminService(db, uploadDir)
+	authSvc := NewAuthService(db, testutil.TestJWTConfig())
+	vaultSvc := NewVaultService(db)
+
+	admin := registerTestUser(t, authSvc, "del-files-admin@example.com")
+	target := registerTestUser(t, authSvc, "del-files-target@example.com")
+
+	vault, err := vaultSvc.CreateVault(target.User.AccountID, target.User.ID, dto.CreateVaultRequest{Name: "Files Vault"}, "en")
+	if err != nil {
+		t.Fatalf("CreateVault failed: %v", err)
+	}
+
+	fileUUID := filepath.Join("2026", "08", "19", "vault-file.bin")
+	diskPath := filepath.Join(uploadDir, fileUUID)
+	if err := os.MkdirAll(filepath.Dir(diskPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	if err := os.WriteFile(diskPath, []byte("content"), 0o644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	fileType := "document"
+	if err := adminSvc.db.Create(&models.File{
+		VaultID: vault.ID, FileableType: &fileType, UUID: fileUUID,
+		Name: "vault-file.bin", Type: "document", MimeType: "application/octet-stream", Size: 7,
+	}).Error; err != nil {
+		t.Fatalf("Create File failed: %v", err)
+	}
+
+	if err := adminSvc.DeleteUser(admin.User.ID, target.User.ID); err != nil {
+		t.Fatalf("DeleteUser failed: %v", err)
+	}
+
+	if _, err := os.Stat(diskPath); !os.IsNotExist(err) {
+		t.Errorf("expected physical file %s to be removed after account deletion, stat err: %v", diskPath, err)
+	}
+}
+
 func TestAdminDeleteUser_RegisteredUserWithDefaultVault(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := database.Connect(&config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(tmpDir, "bonds.db")}, false)
@@ -331,6 +386,78 @@ func TestAdminDeleteUser_RegisteredUserWithDefaultVault(t *testing.T) {
 	adminSvc.db.Model(&models.User{}).Where("id = ?", target.User.ID).Count(&userCount)
 	if userCount != 0 {
 		t.Error("expected target user to be deleted")
+	}
+}
+
+func TestAdminService_deleteContactData_cleansSelectedReminderRecipients_whenForeignKeysEnabled(t *testing.T) {
+	// Given
+	tmpDir := t.TempDir()
+	db, err := database.Connect(&config.DatabaseConfig{Driver: "sqlite", DSN: filepath.Join(tmpDir, "bonds.db")}, false)
+	if err != nil {
+		t.Fatalf("connect database: %v", err)
+	}
+	if err := database.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+	if err := db.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+	if err := models.SeedCurrencies(db); err != nil {
+		t.Fatalf("seed currencies: %v", err)
+	}
+
+	adminSvc := NewAdminService(db, filepath.Join(tmpDir, "uploads"))
+	authSvc := NewAuthService(db, testutil.TestJWTConfig())
+	target := registerTestUser(t, authSvc, "selected-recipient-target@example.com")
+
+	vault := models.Vault{
+		AccountID: target.User.AccountID,
+		Type:      "personal",
+		Name:      "Selected reminder recipient vault",
+	}
+	if err := db.Create(&vault).Error; err != nil {
+		t.Fatalf("create target vault: %v", err)
+	}
+	contact := models.Contact{VaultID: vault.ID, FirstName: strPtrOrNil("Recipient contact")}
+	if err := db.Create(&contact).Error; err != nil {
+		t.Fatalf("create contact: %v", err)
+	}
+	reminder := models.ContactReminder{
+		ContactID: contact.ID,
+		Label:     "Selected recipient reminder",
+		Type:      "one_time",
+		Audience:  models.ReminderAudienceSelectedUsers,
+	}
+	if err := db.Create(&reminder).Error; err != nil {
+		t.Fatalf("create selected-users reminder: %v", err)
+	}
+	if err := db.Create(&models.ContactReminderSelectedUser{
+		ContactReminderID: reminder.ID,
+		UserID:            target.User.ID,
+	}).Error; err != nil {
+		t.Fatalf("create selected reminder recipient: %v", err)
+	}
+
+	// When
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := adminSvc.deleteContactData(tx, contact.ID); err != nil {
+			return fmt.Errorf("delete contact data: %w", err)
+		}
+		return tx.Unscoped().Delete(&contact).Error
+	})
+
+	// Then
+	if err != nil {
+		t.Fatalf("delete contact with selected reminder recipient: %v", err)
+	}
+	var recipientCount int64
+	if err := db.Model(&models.ContactReminderSelectedUser{}).
+		Where("contact_reminder_id = ?", reminder.ID).
+		Count(&recipientCount).Error; err != nil {
+		t.Fatalf("count selected reminder recipients: %v", err)
+	}
+	if recipientCount != 0 {
+		t.Fatalf("selected reminder recipients = %d, want 0", recipientCount)
 	}
 }
 
@@ -378,6 +505,9 @@ func TestAdminDeleteUser_SharedAccount_OnlyDeletesTargetUser(t *testing.T) {
 	if err := adminSvc.db.Create(&invitedUser).Error; err != nil {
 		t.Fatalf("Create invited user failed: %v", err)
 	}
+	if err := adminSvc.db.Create(&models.AccountMembership{AccountID: owner.User.AccountID, UserID: invitedUser.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
 	invitedUserVault := models.UserVault{
 		UserID:     invitedUser.ID,
 		VaultID:    vault.ID,
@@ -418,16 +548,73 @@ func TestAdminDeleteUser_SharedAccount_OnlyDeletesTargetUser(t *testing.T) {
 	}
 
 	var contactCount int64
-	// 2 contacts expected: 1 manually created + 1 auto-created shadow contact for vault owner
 	adminSvc.db.Model(&models.Contact{}).Where("vault_id = ?", vault.ID).Count(&contactCount)
-	if contactCount != 2 {
-		t.Errorf("expected 2 contacts to still exist, got %d", contactCount)
+	if contactCount != 1 {
+		t.Errorf("expected 1 contact to still exist, got %d", contactCount)
 	}
 
 	var uvCount int64
 	adminSvc.db.Model(&models.UserVault{}).Where("user_id = ?", invitedUser.ID).Count(&uvCount)
 	if uvCount != 0 {
 		t.Error("expected deleted user's UserVault to be removed")
+	}
+}
+
+func TestAdminDeleteUser_SharedAccountRejectsSoleVaultManager(t *testing.T) {
+	adminSvc, authSvc, vaultSvc := setupAdminTest(t)
+	owner := registerTestUser(t, authSvc, "guard-shared-owner@example.com")
+	vault, err := vaultSvc.CreateVault(owner.User.AccountID, owner.User.ID, dto.CreateVaultRequest{Name: "Guarded Shared Vault"}, "en")
+	if err != nil {
+		t.Fatalf("CreateVault failed: %v", err)
+	}
+	target := models.User{AccountID: owner.User.AccountID, Email: "guard-shared-target@example.com"}
+	if err := adminSvc.db.Create(&target).Error; err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if err := adminSvc.db.Create(&models.AccountMembership{AccountID: owner.User.AccountID, UserID: target.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := adminSvc.db.Model(&models.UserVault{}).
+		Where("vault_id = ? AND user_id = ?", vault.ID, owner.User.ID).
+		Update("permission", models.PermissionEditor).Error; err != nil {
+		t.Fatalf("demote owner fixture: %v", err)
+	}
+	if err := adminSvc.db.Create(&models.UserVault{
+		VaultID: vault.ID, UserID: target.ID, Permission: models.PermissionManager,
+	}).Error; err != nil {
+		t.Fatalf("create target membership: %v", err)
+	}
+	actor := registerTestUser(t, authSvc, "guard-instance-admin@example.com")
+
+	err = adminSvc.DeleteUser(actor.User.ID, target.ID)
+	if !errors.Is(err, ErrLastVaultManager) {
+		t.Fatalf("DeleteUser error = %v, want ErrLastVaultManager", err)
+	}
+	var count int64
+	adminSvc.db.Model(&models.User{}).Where("id = ?", target.ID).Count(&count)
+	if count != 1 {
+		t.Fatalf("target count after rejected delete = %d, want 1", count)
+	}
+}
+
+func TestAdminToggleUserRejectsSoleVaultManager(t *testing.T) {
+	adminSvc, authSvc, vaultSvc := setupAdminTest(t)
+	target := registerTestUser(t, authSvc, "guard-disable-target@example.com")
+	if _, err := vaultSvc.CreateVault(target.User.AccountID, target.User.ID, dto.CreateVaultRequest{Name: "Disable Guard Vault"}, "en"); err != nil {
+		t.Fatalf("CreateVault failed: %v", err)
+	}
+	actor := registerTestUser(t, authSvc, "guard-disable-admin@example.com")
+
+	err := adminSvc.ToggleUser(actor.User.ID, target.User.ID, true)
+	if !errors.Is(err, ErrLastVaultManager) {
+		t.Fatalf("ToggleUser error = %v, want ErrLastVaultManager", err)
+	}
+	var user models.User
+	if err := adminSvc.db.First(&user, "id = ?", target.User.ID).Error; err != nil {
+		t.Fatalf("load target: %v", err)
+	}
+	if user.Disabled {
+		t.Fatal("sole manager was disabled")
 	}
 }
 

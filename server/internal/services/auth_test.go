@@ -144,43 +144,6 @@ func TestRegisterSeedsDefaultData(t *testing.T) {
 	if channel.VerifiedAt == nil {
 		t.Error("notification channel should have verified_at set")
 	}
-
-	var tmpl models.Template
-	if err := db.Where("account_id = ? AND name = ?", accountID, "Default template").First(&tmpl).Error; err != nil {
-		t.Fatalf("default template not found: %v", err)
-	}
-	if tmpl.CanBeDeleted {
-		t.Error("default template should have can_be_deleted=false")
-	}
-	var pages []models.TemplatePage
-	if err := db.Where("template_id = ?", tmpl.ID).Find(&pages).Error; err != nil {
-		t.Fatalf("template pages query failed: %v", err)
-	}
-	if len(pages) != 5 {
-		t.Errorf("expected 5 template pages, got %d", len(pages))
-	}
-
-	var informationPage models.TemplatePage
-	if err := db.Where("template_id = ? AND slug = ?", tmpl.ID, "information").First(&informationPage).Error; err != nil {
-		t.Fatalf("information template page not found: %v", err)
-	}
-	var informationModules []models.ModuleTemplatePage
-	if err := db.Where("template_page_id = ?", informationPage.ID).Order("position ASC").Find(&informationModules).Error; err != nil {
-		t.Fatalf("information module bindings query failed: %v", err)
-	}
-	if len(informationModules) != 9 {
-		t.Fatalf("expected 9 information module bindings, got %d", len(informationModules))
-	}
-	var giftModule models.Module
-	if err := db.Where("account_id = ? AND type = ? AND name_translation_key = ?", accountID, "gifts", "seed.modules.gifts").First(&giftModule).Error; err != nil {
-		t.Fatalf("default gifts module not found: %v", err)
-	}
-	if giftModule.CanBeDeleted {
-		t.Error("default gifts module should have can_be_deleted=false")
-	}
-	if informationModules[5].ModuleID != giftModule.ID || informationModules[5].Position == nil || *informationModules[5].Position != 6 {
-		t.Errorf("expected gifts module at information position 6, got module_id=%d position=%v", informationModules[5].ModuleID, informationModules[5].Position)
-	}
 }
 
 func TestRegisterDuplicateEmail(t *testing.T) {
@@ -325,5 +288,23 @@ func TestRefreshTokenDisabledUser(t *testing.T) {
 	})
 	if err != ErrUserDisabled {
 		t.Errorf("expected ErrUserDisabled, got %v", err)
+	}
+}
+
+func TestRefreshTokenWithoutAccountUsesHomeAccount(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	svc := NewAuthService(db, testutil.TestJWTConfig())
+	registered, err := svc.Register(dto.RegisterRequest{
+		FirstName: "Passkey", LastName: "User", Email: "passkey-home@example.com", Password: "password123",
+	}, "en")
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	auth, err := svc.RefreshToken(&middleware.JWTClaims{UserID: registered.User.ID})
+	if err != nil {
+		t.Fatalf("WebAuthn token issuance failed: %v", err)
+	}
+	if auth.User.AccountID != registered.User.AccountID || auth.Token == "" {
+		t.Fatalf("expected authenticated home account %s, got %+v", registered.User.AccountID, auth.User)
 	}
 }

@@ -15,7 +15,7 @@ cp server/.env.example server/.env
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `DEBUG` | `false` | 调试模式：启用请求日志、SQL 日志、Swagger UI（默认开启） |
-| `JWT_SECRET` | — | **生产环境必填。** 认证令牌签名密钥 |
+| `JWT_SECRET` | — | **生产环境必填。** 使用 `openssl rand -hex 32` 生成 256 位密钥，持久保存并在重启时复用。 |
 | `SETTINGS_ENC_KEY` | _(空)_ | 可选。启用敏感系统设置（SMTP 密码、OAuth client_secret、地理编码 API key）的 AES-256-GCM 静态加密。详见下方[加密敏感设置](#加密敏感设置)。 |
 | `SERVER_PORT` | `8080` | 服务端口 |
 | `SERVER_HOST` | `0.0.0.0` | 监听地址 |
@@ -57,13 +57,15 @@ DB_DSN="host=localhost port=5432 user=bonds password=secret dbname=bonds sslmode
 - **OIDC**：OpenID Connect 提供商，用于企业 SSO（Authentik、Keycloak 等）。
 - **WebAuthn**：通行密钥认证的 Relying Party 配置。
 - **Telegram**：Bot Token，用于 Telegram 通知。
-- **地理编码**：服务提供商和 API Key。
+- **地理编码**：启用的服务商、地址隐私精度、各服务商独立凭据和自托管 Photon 地址。
 - **存储**：最大上传文件大小限制（在 Web UI 中配置，不再使用环境变量限制）。
 - **备份**：Cron 调度、保留天数。
 - **Swagger**：独立于调试模式启用或禁用 API 文档界面。
 
 ::: tip 从环境变量迁移
 首次启动时，Bonds 会从环境变量中读取这些设置作为初始值写入数据库。之后所有修改都通过管理面板进行。环境变量仅作为初始种子值使用。
+
+地理编码服务商凭据和自托管地址仅通过管理面板配置，不会从通用的环境变量 API Key 导入。
 :::
 
 ## 加密敏感设置
@@ -89,7 +91,8 @@ SETTINGS_ENC_KEY="$(openssl rand -hex 32)"
 
 | 字段 | 存储 |
 |------|------|
-| `system_settings.value`：`smtp.password`、`geocoding.api_key`，以及任何 `secret.*` 键 | AES-256-GCM |
+| `system_settings.value`：`smtp.password` 以及任何 `secret.*` 键 | AES-256-GCM |
+| `geocoding_provider_configs.config`（每个服务商一份结构化配置） | AES-256-GCM |
 | `oauth_providers.client_secret`（GitHub、Google、GitLab、Discord、OIDC） | AES-256-GCM |
 
 ::: warning 丢失密钥的后果
@@ -98,7 +101,7 @@ SETTINGS_ENC_KEY="$(openssl rand -hex 32)"
 
 ## 生产环境清单
 
-1. **设置 `JWT_SECRET`**：使用强随机字符串（32+ 字符）。
+1. **设置 `JWT_SECRET`**：只执行一次 `export JWT_SECRET="$(openssl rand -hex 32)"`，将 256 位值保存到受保护的环境变量或密钥管理服务，并在重启时复用。请规划轮换：轮换会使现有会话失效，且 DAV 订阅凭据的加密派生自该密钥，可能需要重新录入。
 2. **设置 `SETTINGS_ENC_KEY`**：生产环境推荐启用，对 SMTP/OAuth/地理编码凭证做静态加密。
 3. **设置 `APP_ENV=production`**：禁用调试功能。
 4. **设置 `APP_URL`**：你的公开 URL，用于邮件链接和 OAuth 回调。
@@ -115,8 +118,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - JWT_SECRET=修改为随机字符串
-      - SETTINGS_ENC_KEY=另一个随机字符串
+      - JWT_SECRET=${JWT_SECRET:?启动前设置持久保存的 256 位 JWT 密钥}
+      - SETTINGS_ENC_KEY=${SETTINGS_ENC_KEY:?启动前设置持久保存的设置加密密钥}
       - APP_ENV=production
       - APP_URL=https://bonds.example.com
       - DB_DSN=/data/bonds.db

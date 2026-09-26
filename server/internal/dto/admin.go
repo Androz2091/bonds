@@ -11,15 +11,39 @@ type AdminUserResponse struct {
 	IsAccountAdministrator  bool      `json:"is_account_administrator" example:"true"`
 	IsInstanceAdministrator bool      `json:"is_instance_administrator" example:"false"`
 	Disabled                bool      `json:"disabled" example:"false"`
-	ContactCount            int64     `json:"contact_count" example:"42"`
-	StorageUsed             int64     `json:"storage_used" example:"10485760"`
-	VaultCount              int64     `json:"vault_count" example:"2"`
 	StorageLimitInMB        int       `json:"storage_limit_in_mb" example:"0"`
 	CreatedAt               time.Time `json:"created_at" example:"2026-01-15T10:30:00Z"`
 }
 
 type AdminToggleUserRequest struct {
 	Disabled *bool `json:"disabled" example:"true"`
+}
+
+type AdminCreateUserRequest struct {
+	Email     string `json:"email" validate:"required,email"`
+	FirstName string `json:"first_name" validate:"required"`
+	LastName  string `json:"last_name"`
+}
+
+type AdminUpdateIdentityRequest struct {
+	FirstName string `json:"first_name" validate:"required"`
+	LastName  string `json:"last_name"`
+}
+
+type AdminRequestEmailChange struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+type AuditEventResponse struct {
+	ID          uint      `json:"id"`
+	ActorUserID *string   `json:"actor_user_id,omitempty"`
+	AccountID   *string   `json:"account_id,omitempty"`
+	VaultID     *string   `json:"vault_id,omitempty"`
+	Method      string    `json:"method"`
+	Route       string    `json:"route"`
+	Status      int       `json:"status"`
+	RequestID   string    `json:"request_id"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type AdminSetAdminRequest struct {
@@ -43,14 +67,24 @@ type UpdateSystemSettingsRequest struct {
 	Settings []SystemSettingItem `json:"settings" validate:"required"`
 }
 
+// OAuthProviderInfo pairs an OAuth provider's URL slug with its display label.
+type OAuthProviderInfo struct {
+	Name        string `json:"name" example:"nextcloud-sso"`
+	DisplayName string `json:"display_name" example:"Nextcloud SSO"`
+}
+
 type InstanceInfoResponse struct {
-	Version             string   `json:"version" example:"v0.1.5"`
-	RegistrationEnabled bool     `json:"registration_enabled" example:"true"`
-	PasswordAuthEnabled bool     `json:"password_auth_enabled" example:"true"`
-	RequireEmailVerification bool     `json:"require_email_verification" example:"false"`
-	OAuthProviders      []string `json:"oauth_providers" example:"github,google"`
-	WebAuthnEnabled     bool     `json:"webauthn_enabled" example:"true"`
-	AppName             string   `json:"app_name" example:"Bonds"`
+	Version                  string              `json:"version" example:"v0.1.5"`
+	UpdateAvailable          bool                `json:"update_available" example:"true"`
+	LatestVersion            string              `json:"latest_version,omitempty" example:"v0.2.0"`
+	LatestVersionURL         string              `json:"latest_version_url,omitempty" example:"https://github.com/naiba/bonds/releases/tag/v0.2.0"`
+	RegistrationEnabled      bool                `json:"registration_enabled" example:"true"`
+	PasswordAuthEnabled      bool                `json:"password_auth_enabled" example:"true"`
+	RequireEmailVerification bool                `json:"require_email_verification" example:"false"`
+	OAuthProviders           []string            `json:"oauth_providers" example:"github,google"`
+	OAuthProviderDetails     []OAuthProviderInfo `json:"oauth_provider_details"`
+	WebAuthnEnabled          bool                `json:"webauthn_enabled" example:"true"`
+	AppName                  string              `json:"app_name" example:"Bonds"`
 }
 
 type RebuildSearchIndexResponse struct {

@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -8,12 +9,15 @@ import (
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/i18n"
 	"github.com/naiba/bonds/internal/models"
+	userTimezone "github.com/naiba/bonds/internal/timezone"
 	"gorm.io/gorm"
 )
 
 var (
-	ErrInvalidNameOrder = errors.New("name_order must contain at least one variable like %first_name%")
-	ErrInvalidWeekStart = errors.New("week_start must be sunday or monday")
+	ErrInvalidNameOrder      = errors.New("name_order must contain at least one variable like %first_name%")
+	ErrInvalidWeekStart      = errors.New("week_start must be sunday or monday")
+	ErrInvalidViewPreference = errors.New("invalid view preference")
+	ErrInvalidTimezone       = errors.New("timezone is not a valid IANA timezone")
 
 	// ErrUnsupportedLocale is returned when a caller tries to persist a locale
 	// code that the embedded i18n bundle does not load. Without this guard the
@@ -47,9 +51,15 @@ func (s *PreferenceService) Get(userID string) (*dto.PreferencesResponse, error)
 		}
 		return nil, err
 	}
-	tz := ""
+	tz := userTimezone.Default
 	if user.Timezone != nil {
-		tz = *user.Timezone
+		if normalized, err := userTimezone.Normalize(*user.Timezone); err == nil {
+			tz = normalized
+		}
+	}
+	columns := defaultContactListColumns()
+	if err := json.Unmarshal([]byte(user.ContactListColumns), &columns); err != nil || !validContactListColumns(columns) {
+		columns = defaultContactListColumns()
 	}
 	return &dto.PreferencesResponse{
 		NameOrder:                 user.NameOrder,
@@ -62,6 +72,12 @@ func (s *PreferenceService) Get(userID string) (*dto.PreferencesResponse, error)
 		DefaultMapSite:            user.DefaultMapSite,
 		HelpShown:                 user.HelpShown,
 		EnableAlternativeCalendar: user.EnableAlternativeCalendar,
+		ContactSortOrder:          normalizedChoice(user.ContactSortOrder, "name", "name", "first_met_at", "updated_at"),
+		ContactListColumns:        columns,
+		DashboardTab:              normalizedChoice(user.DashboardTab, "feed", "feed", "activities", "life_metrics"),
+		TaskView:                  normalizedChoice(user.TaskView, "list", "list", "kanban"),
+		TaskSort:                  normalizedChoice(user.TaskSort, "custom", "custom", "due_date"),
+		Theme:                     normalizedChoice(user.Theme, "system", "light", "dark", "system"),
 	}, nil
 }
 
@@ -77,7 +93,23 @@ func (s *PreferenceService) UpdateDateFormat(userID string, req dto.UpdateDateFo
 }
 
 func (s *PreferenceService) UpdateTimezone(userID string, req dto.UpdateTimezoneRequest) error {
-	return s.db.Model(&models.User{}).Where("id = ?", userID).Update("timezone", req.Timezone).Error
+	timezone, err := userTimezone.Normalize(req.Timezone)
+	if err != nil {
+		return ErrInvalidTimezone
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		timezoneChanged, err := userTimezonePreferenceChanged(tx, userID, timezone)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&models.User{}).Where("id = ?", userID).Update("timezone", timezone).Error; err != nil {
+			return err
+		}
+		if timezoneChanged {
+			return rebuildPendingReminderSchedulesForUser(tx, userID)
+		}
+		return nil
+	})
 }
 
 func (s *PreferenceService) UpdateLocale(userID string, req dto.UpdateLocaleRequest) error {
@@ -185,7 +217,11 @@ func (s *PreferenceService) UpdateAll(userID string, req dto.UpdatePreferencesRe
 		updates["week_start"] = req.WeekStart
 	}
 	if req.Timezone != "" {
-		updates["timezone"] = req.Timezone
+		timezone, err := userTimezone.Normalize(req.Timezone)
+		if err != nil {
+			return nil, ErrInvalidTimezone
+		}
+		updates["timezone"] = timezone
 	}
 	if req.Locale != "" {
 		if !i18n.IsSupported(req.Locale) {
@@ -208,13 +244,148 @@ func (s *PreferenceService) UpdateAll(userID string, req dto.UpdatePreferencesRe
 	if req.EnableAlternativeCalendar != nil {
 		updates["enable_alternative_calendar"] = *req.EnableAlternativeCalendar
 	}
+	if req.ContactSortOrder != "" {
+		if !isChoice(req.ContactSortOrder, "name", "first_met_at", "updated_at") {
+			return nil, ErrInvalidViewPreference
+		}
+		updates["contact_sort_order"] = req.ContactSortOrder
+	}
+	if req.ContactListColumns != nil {
+		if !validContactListColumns(req.ContactListColumns) {
+			return nil, ErrInvalidViewPreference
+		}
+		encoded, err := json.Marshal(req.ContactListColumns)
+		if err != nil {
+			return nil, err
+		}
+		updates["contact_list_columns"] = string(encoded)
+	}
+	if req.DashboardTab != "" {
+		if !isChoice(req.DashboardTab, "feed", "activities", "life_metrics") {
+			return nil, ErrInvalidViewPreference
+		}
+		updates["dashboard_tab"] = req.DashboardTab
+	}
+	if req.TaskView != "" {
+		if !isChoice(req.TaskView, "list", "kanban") {
+			return nil, ErrInvalidViewPreference
+		}
+		updates["task_view"] = req.TaskView
+	}
+	if req.TaskSort != "" {
+		if !isChoice(req.TaskSort, "custom", "due_date") {
+			return nil, ErrInvalidViewPreference
+		}
+		updates["task_sort"] = req.TaskSort
+	}
+	if req.Theme != "" {
+		if !isChoice(req.Theme, "light", "dark", "system") {
+			return nil, ErrInvalidViewPreference
+		}
+		updates["theme"] = req.Theme
+	}
 	if len(updates) == 0 {
 		return s.Get(userID)
 	}
-	if err := s.db.Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		timezoneChanged := false
+		if timezone, ok := updates["timezone"].(string); ok {
+			changed, err := userTimezonePreferenceChanged(tx, userID, timezone)
+			if err != nil {
+				return err
+			}
+			timezoneChanged = changed
+		}
+		if err := tx.Model(&models.User{}).Where("id = ?", userID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if timezoneChanged {
+			return rebuildPendingReminderSchedulesForUser(tx, userID)
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return s.Get(userID)
+}
+
+func userTimezonePreferenceChanged(db *gorm.DB, userID, timezone string) (bool, error) {
+	var user models.User
+	if err := db.Select("timezone").First(&user, "id = ?", userID).Error; err != nil {
+		return false, err
+	}
+	if user.Timezone == nil {
+		return true, nil
+	}
+	current, err := userTimezone.Normalize(*user.Timezone)
+	if err != nil {
+		return true, nil
+	}
+	return current != timezone, nil
+}
+
+func rebuildPendingReminderSchedulesForUser(db *gorm.DB, userID string) error {
+	var channelIDs []uint
+	if err := db.Model(&models.UserNotificationChannel{}).Where("user_id = ?", userID).Pluck("id", &channelIDs).Error; err != nil {
+		return err
+	}
+	if len(channelIDs) == 0 {
+		return nil
+	}
+	if err := db.Where("user_notification_channel_id IN ? AND triggered_at IS NULL", channelIDs).
+		Delete(&models.ContactReminderScheduled{}).Error; err != nil {
+		return err
+	}
+	var activeChannelIDs []uint
+	if err := db.Model(&models.UserNotificationChannel{}).
+		Where("id IN ? AND active = ?", channelIDs, true).
+		Pluck("id", &activeChannelIDs).Error; err != nil {
+		return err
+	}
+	for _, channelID := range activeChannelIDs {
+		if err := scheduleAllContactReminders(db, channelID, userID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func defaultContactListColumns() []string {
+	return []string{"name", "nickname", "first_met_at", "status", "updated_at"}
+}
+
+func validContactListColumns(columns []string) bool {
+	if len(columns) == 0 || len(columns) > 8 {
+		return false
+	}
+	allowed := map[string]bool{
+		"name": true, "nickname": true, "birthday": true, "age": true,
+		"groups": true, "status": true, "first_met_at": true, "updated_at": true,
+	}
+	seen := make(map[string]bool, len(columns))
+	for _, column := range columns {
+		if !allowed[column] || seen[column] {
+			return false
+		}
+		seen[column] = true
+	}
+	return seen["name"]
+}
+
+func isChoice(value string, choices ...string) bool {
+	for _, choice := range choices {
+		if value == choice {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedChoice(value, fallback string, choices ...string) string {
+	if isChoice(value, choices...) {
+		return value
+	}
+	return fallback
 }
 
 func isValidWeekStart(weekStart string) bool {

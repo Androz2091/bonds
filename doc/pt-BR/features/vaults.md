@@ -28,15 +28,15 @@ Cada cofre tem seu próprio conjunto de padrões, semeados na criação:
 
 - **Tipos de data importantes**: Data de nascimento, data de falecimento (incorporado), além de tipos personalizados.
 - **Parâmetros de registro de humor**: Escala de humor de 5 níveis com emoji e cores.
-- **Categorias de eventos da vida**: 4 categorias com 20 tipos de eventos.
+- **Categorias de atividades**: 4 categorias com 20 tipos de atividades.
 - **Modelos de fatos rápidos**: Como nos conhecemos, hobbies, preferências alimentares.
 
-## Contatos Sombra do Usuário
+## Usuários do Sistema e Contatos
 
-Bonds usa uma arquitetura de contato sombra. Cada usuário tem um contato sombra privado criado automaticamente dentro de cada cofre ao qual pertence.
-- **Mapeamento usuário-cofre**: O ID do contato sombra está vinculado em `UserVault.ContactID` e exposto ao aplicativo web via `user_contact_id` no objeto de resposta do cofre.
-- **Uso pessoal**: O contato sombra rastreia seu humor pessoal e eventos da vida, mantendo-os distintos dos contatos externos.
-- **Regras de privacidade**: O contato sombra fica oculto das listagens principais de contatos, resultados de busca, catálogos de endereços e exportações. Ele não pode ser excluído.
+Membros do cofre e contatos são conceitos independentes. Criar ou ingressar em um cofre nunca cria um contato para o usuário do sistema.
+- **Associação e permissões**: `UserVault` apenas vincula um usuário do sistema ao cofre e armazena sua função.
+- **Registro de humor**: Os registros de humor pertencem diretamente ao usuário atual dentro do cofre.
+- **Atividades**: Atividades criadas no painel armazenam o usuário do sistema como sujeito. Participantes opcionais são contatos comuns e somente eles recebem a atividade em suas linhas do tempo.
 
 ## Painel do Cofre
 
@@ -46,14 +46,14 @@ O espaço de trabalho principal em um cofre é um painel responsivo de três col
 Exibe seus **Contatos Recentes** e **Mais Consultados** para acesso rápido. Esta coluna fica oculta em telas de tablet pequeno.
 
 ### Coluna Central
-Apresenta um controle Segmentado para alternar entre três abas dinâmicas. Sua aba selecionada é persisitida no servidor usando a configuração `defaultTab`, carregando sua aba preferida automaticamente na próxima visita.
-1. **Atividades**: Um feed mostrando alterações recentes e ações tomadas por usuários neste cofre.
-2. **Seus Eventos da Vida**: Uma visão geral dos marcos pessoais registrados em seu contato sombra. Eventos podem incluir participantes adicionais do mesmo cofre e aparecerão na linha do tempo de contato de cada participante.
+Apresenta um controle Segmentado para alternar entre três abas dinâmicas. Sua aba selecionada é persistida no servidor usando `default-dashboard-tab`, carregando sua aba preferida automaticamente na próxima visita.
+1. **Feed**: Alterações recentes e ações tomadas por usuários neste cofre.
+2. **Atividades**: Uma visão geral de todas as atividades no cofre. Atividades criadas no painel identificam o usuário do sistema como sujeito e podem incluir contatos opcionais; essas atividades também aparecem na linha do tempo de cada participante.
 3. **Métricas da Vida**: Registros simples de eventos rastreando métricas personalizadas. Clique em "+1" para registrar uma ocorrência. Clique em detalhes para ver um gráfico de barras mensal dos eventos registrados.
 
 ### Coluna Direita
 Contém widgets para:
-- **Registro de Humor**: Registre seu humor em uma escala de cinco pontos, vinculada ao seu contato sombra.
+- **Registro de Humor**: Registre seu humor em uma escala de cinco pontos. O registro é vinculado ao usuário do sistema e ao cofre atual.
 - **Próximos Lembretes**: Lembretes que se aproximam em breve.
 - **Tarefas Pendentes**: Tarefas abertas que exigem sua atenção.
 

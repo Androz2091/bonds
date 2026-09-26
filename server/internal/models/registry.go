@@ -4,17 +4,16 @@ func AllModels() []interface{} {
 	return []interface{}{
 		&Account{},
 		&User{},
+		&AccountMembership{},
+		&AuthActionToken{},
 		&Vault{},
 		&Contact{},
 		&UserVault{},
 		&ContactVaultUser{},
 
-		&Template{},
-		&TemplatePage{},
-		&Module{},
-		&ModuleRow{},
-		&ModuleRowField{},
-		&ModuleTemplatePage{},
+		&VaultContactTemplate{},
+		&VaultContactTemplatePage{},
+		&VaultContactTemplateModule{},
 
 		&Gender{},
 		&Pronoun{},
@@ -23,6 +22,7 @@ func AllModels() []interface{} {
 		&ContactImportantDateType{},
 		&ContactImportantDate{},
 		&ContactReminder{},
+		&ContactReminderSelectedUser{},
 		&ContactReminderScheduled{},
 		&ContactTask{},
 		&TaskContact{},
@@ -62,12 +62,10 @@ func AllModels() []interface{} {
 		&PostTag{},
 		&SliceOfLife{},
 
-		&LifeEventCategory{},
-		&LifeEventType{},
-		&TimelineEvent{},
-		&TimelineEventParticipant{},
-		&LifeEvent{},
-		&LifeEventParticipant{},
+		&ActivityCategory{},
+		&ActivityType{},
+		&Activity{},
+		&ActivityParticipant{},
 
 		&PetCategory{},
 		&Pet{},
@@ -79,6 +77,7 @@ func AllModels() []interface{} {
 		&VaultQuickFactsTemplate{},
 		&Religion{},
 		&File{},
+		&ContentFileReference{},
 		&LifeMetric{},
 		&ContactLifeMetric{},
 		&MoodTrackingParameter{},
@@ -93,6 +92,7 @@ func AllModels() []interface{} {
 		&DavSyncLog{},
 		&Cron{},
 		&Log{},
+		&AuditEvent{},
 
 		&RelationshipGroupType{},
 		&RelationshipType{},
@@ -108,6 +108,7 @@ func AllModels() []interface{} {
 		&WebAuthnCredential{},
 
 		&OAuthProvider{},
+		&GeocodingProviderConfig{},
 		&SystemSetting{},
 		&PersonalAccessToken{},
 	}

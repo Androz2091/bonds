@@ -1,17 +1,35 @@
-import React, { useState, useEffect } from "react";
-import { formatContactName, formatContactInitials, useVaultNameOrder } from "@/utils/nameFormat";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  formatContactName,
+  formatContactInitials,
+  useNameOrder,
+} from "@/utils/nameFormat";
 import { useDateFormat, formatDate } from "@/utils/dateFormat";
-import { dateInputToTimestamp, formatDateOnly, timestampToDateInput } from "@/utils/dateOnlyInput";
+import {
+  dateInputToTimestamp,
+  formatDateOnly,
+  timestampToDateInput,
+} from "@/utils/dateOnlyInput";
 import CalendarDatePicker from "@/components/CalendarDatePicker";
+import { sectionNavCards } from "@/pages/contact/sectionNavCards";
 import type { CalendarDatePickerValue } from "@/components/CalendarDatePicker";
-import { buildContactFirstMetRequest, contactFirstMetToCalendarDate, formatContactFirstMetDisplay } from "@/utils/contactFirstMet";
+import {
+  buildContactFirstMetRequest,
+  contactFirstMetToCalendarDate,
+  formatContactFirstMetDisplay,
+} from "@/utils/contactFirstMet";
 import { Link, useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   Card,
   Typography,
   Spin,
   Button,
-  Tabs,
   Space,
   Popconfirm,
   App,
@@ -25,7 +43,9 @@ import {
   theme,
   Dropdown,
   Checkbox,
-  Segmented,
+  Grid,
+  Drawer,
+  FloatButton,
 } from "antd";
 import {
   EditOutlined,
@@ -40,12 +60,41 @@ import {
   MoreOutlined,
   LayoutOutlined,
   CheckCircleOutlined,
+  SettingOutlined,
 } from "@ant-design/icons";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { api, httpClient } from "@/api";
-import type { APIError, Contact, UpdateContactRequest, Vault, PersonalizeItem, ContactTabsResponse, ContactTabPage } from "@/api";
+import type {
+  APIError,
+  Contact,
+  UpdateContactRequest,
+  Vault,
+  ContactLayoutTemplateSummary,
+  ContactTabsResponse,
+  ContactTabPage,
+  ContactLabel,
+  LabelResponse,
+  PersonalizeItem,
+} from "@/api";
 import { useTranslation } from "react-i18next";
 import dayjs from "dayjs";
+import { parseContactSourceFocus } from "@/utils/feedSourceLink";
+import type { NormalizedFeedSource } from "@/utils/feedSourceLink";
+import {
+  invalidateCalendarQueries,
+  invalidateContactQueries,
+  invalidateFeedQueries,
+  invalidateReminderQueries,
+  removeContactFromVaultListCaches,
+} from "@/utils/queryInvalidation";
+import type {
+  ContactQueryScope,
+  QueryInvalidationScopes,
+} from "@/utils/queryInvalidation";
+import { invalidateVaultTaskImpactQueries } from "@/utils/taskQueryInvalidation";
+import { refreshMostConsultedProjections } from "@/utils/mostConsultedProjection";
+import { sortLabelsByName } from "@/utils/labelSort";
+import ContactLayoutManager from "@/components/contact-layout/ContactLayoutManager";
 
 import NotesModule from "./modules/NotesModule";
 import RemindersModule from "./modules/RemindersModule";
@@ -59,17 +108,43 @@ import LoansModule from "./modules/LoansModule";
 import PetsModule from "./modules/PetsModule";
 import RelationshipsModule from "./modules/RelationshipsModule";
 import GoalsModule from "./modules/GoalsModule";
-import LifeEventsModule from "./modules/LifeEventsModule";
+import ActivitiesModule from "./modules/ActivitiesModule";
 import QuickFactsModule from "./modules/QuickFactsModule";
 import PhotosModule from "./modules/PhotosModule";
 import DocumentsModule from "./modules/DocumentsModule";
 import LabelsModule from "./modules/LabelsModule";
 import FeedModule from "./modules/FeedModule";
-import ExtraInfoModule from "./modules/ExtraInfoModule";
+import ReligionModule from "./modules/ReligionModule";
+import JobsModule from "./modules/JobsModule";
 import GroupsModule from "./modules/GroupsModule";
-import ContactSummaryCard from "./modules/ContactSummaryCard";
+import ContactSummaryModule from "./modules/ContactSummaryModule";
+import RelationshipNetworkModule from "./modules/RelationshipNetworkModule";
+import { buildContactLabelSyncPlan } from "./modules/contactLabelSync";
+import ContactImportantDatesEditor from "./ContactImportantDatesEditor";
+import {
+  areImportantDateDraftsValid,
+  buildImportantDateChanges,
+  importantDatesToDrafts,
+} from "./contactImportantDates";
+import type { ContactImportantDateDraft } from "./contactImportantDates";
 
 const { Title, Text } = Typography;
+
+function contactSectionKey(page: ContactTabPage, index: number): string {
+  return `${page.id ?? `fallback-${index}`}:${page.slug ?? index}`;
+}
+
+function findTargetSectionKey(
+  target: NormalizedFeedSource,
+  pages: ContactTabPage[],
+): string | null {
+  const targetIndex = pages.findIndex((page) =>
+    (page.modules ?? []).some((module) => module.type === target.module),
+  );
+  return targetIndex >= 0
+    ? contactSectionKey(pages[targetIndex]!, targetIndex)
+    : null;
+}
 
 function buildContactListUrl(vaultId: string, search: string): string {
   const incomingParams = new URLSearchParams(search);
@@ -84,34 +159,194 @@ function buildContactListUrl(vaultId: string, search: string): string {
   return `/vaults/${vaultId}/contacts${query ? `?${query}` : ""}`;
 }
 
-type ContactEditFormValues = Omit<UpdateContactRequest, "last_talked_to" | "first_met_at" | "first_met_date_precision" | "first_met_year" | "first_met_month" | "first_met_day"> & {
+type ContactEditFormValues = Omit<
+  UpdateContactRequest,
+  | "last_talked_to"
+  | "first_met_at"
+  | "first_met_date_precision"
+  | "first_met_year"
+  | "first_met_month"
+  | "first_met_day"
+  | "important_date_changes"
+> & {
   last_talked_to?: string;
   first_met?: CalendarDatePickerValue;
+  label_ids?: number[];
+  important_dates?: ContactImportantDateDraft[];
 };
 
-function buildUpdateContactRequest(values: ContactEditFormValues): UpdateContactRequest {
+type MoveContactMutationOperation = {
+  readonly source: ContactQueryScope;
+  readonly target: ContactQueryScope;
+};
+
+type ContactMutationOperation = {
+  readonly contact: ContactQueryScope;
+};
+
+type UpdateContactMutationOperation = ContactMutationOperation & {
+  readonly request: UpdateContactRequest;
+  readonly labelIds?: readonly number[];
+};
+
+type DeleteContactMutationOperation = ContactMutationOperation & {
+  readonly contactListUrl: string;
+};
+
+type AvatarUploadMutationOperation = ContactMutationOperation & {
+  readonly file: File;
+};
+
+function createContactQueryScope(
+  vaultId: string | number,
+  contactId: string | number,
+): ContactQueryScope {
+  return Object.freeze({
+    vaultId: String(vaultId),
+    contactId: String(contactId),
+  } satisfies ContactQueryScope);
+}
+
+function buildUpdateContactRequest(
+  values: ContactEditFormValues,
+  originalImportantDates: Contact["important_dates"],
+): UpdateContactRequest {
+  const contactValues = { ...values };
+  const importantDateDrafts = contactValues.important_dates;
+  delete contactValues.label_ids;
+  delete contactValues.important_dates;
   const request: UpdateContactRequest = {
-    ...values,
+    ...contactValues,
     last_talked_to: dateInputToTimestamp(values.last_talked_to),
     ...buildContactFirstMetRequest(values.first_met),
+    important_date_changes: buildImportantDateChanges(
+      originalImportantDates,
+      importantDateDrafts,
+    ),
   };
   if (!request.last_talked_to) delete request.last_talked_to;
   if (!request.first_met_at) delete request.first_met_at;
-  if (!request.first_met_date_precision) delete request.first_met_date_precision;
+  if (!request.first_met_date_precision)
+    delete request.first_met_date_precision;
   if (request.first_met_year == null) delete request.first_met_year;
   if (request.first_met_month == null) delete request.first_met_month;
   if (request.first_met_day == null) delete request.first_met_day;
-  if (!request.first_met_through_contact_id) delete request.first_met_through_contact_id;
-  if (request.stay_in_touch_frequency_days == null) delete request.stay_in_touch_frequency_days;
+  if (!request.first_met_through_contact_id)
+    delete request.first_met_through_contact_id;
+  if (request.stay_in_touch_frequency_days == null)
+    delete request.stay_in_touch_frequency_days;
   return request;
 }
 
-// Module type → component mapping for dynamic tab rendering.
-// Modules like avatar, contact_names, family_summary, gender_pronoun, company,
-// religions are handled by the contact header card and ExtraInfoModule, not here.
+function contactLabelAssignmentsQueryKey(vaultId: string, contactId: string) {
+  return ["vaults", vaultId, "contacts", contactId, "labels"] as const;
+}
+
+// How far a jumped-to anchor must stay below the viewport top: past the app
+// header and vault nav (116px) plus breathing room. In compact mode the sticky
+// section Select (8px padding + 32px control + 12px padding, from 116) also
+// stands over the content, so anchors must clear its measured bottom edge
+// (~179px — the Select renders taller than its nominal 32px) with room to
+// spare; an anchor at 132 would put the heading underneath it.
+const SECTION_ANCHOR_MARGIN = 132;
+const COMPACT_SECTION_ANCHOR_MARGIN = 188;
+
+// Smooth scrolling aims at where the target was when the animation started,
+// but lazily-mounted sections between here and there inflate from their
+// placeholder height as the viewport passes them, moving the target. Once the
+// animation goes quiet, re-assert the destination if it drifted; give up after
+// a few seconds rather than fight a reader who has scrolled on.
+function settleIntoView(node: HTMLElement, isCurrent: () => boolean) {
+  if (!isCurrent()) return;
+  node.scrollIntoView({ behavior: "smooth", block: "start" });
+  let lastY = Number.NaN;
+  let quietFrames = 0;
+  let frames = 0;
+  const watch = () => {
+    if (!isCurrent()) return;
+    if (frames++ > 240) return;
+    const y = window.scrollY;
+    quietFrames = y === lastY ? quietFrames + 1 : 0;
+    lastY = y;
+    if (quietFrames < 3) {
+      requestAnimationFrame(watch);
+      return;
+    }
+    const margin = parseFloat(getComputedStyle(node).scrollMarginTop) || 0;
+    if (Math.abs(node.getBoundingClientRect().top - margin) > 4) {
+      node.scrollIntoView({ behavior: "auto", block: "start" });
+    }
+  };
+  requestAnimationFrame(watch);
+}
+
+function vaultLabelsQueryKey(vaultId: string) {
+  return ["vaults", vaultId, "labels"] as const;
+}
+
+function ContactEditLabelsField({ vaultId }: { readonly vaultId: string }) {
+  const { t, i18n } = useTranslation();
+  const { data: allLabels = [], isLoading: allLabelsLoading } = useQuery<
+    LabelResponse[]
+  >({
+    queryKey: vaultLabelsQueryKey(vaultId),
+    queryFn: async () => {
+      const response = await api.vaultSettings.settingsLabelsList(vaultId);
+      return response.data ?? [];
+    },
+  });
+
+  if (allLabelsLoading) {
+    return (
+      <div style={{ display: "grid", placeItems: "center", minHeight: 72 }}>
+        <Spin size="small" />
+      </div>
+    );
+  }
+  const sortedLabels = sortLabelsByName(
+    allLabels,
+    i18n.resolvedLanguage ?? i18n.language,
+  );
+
+  return (
+    <>
+      <Form.Item<ContactEditFormValues>
+        name="label_ids"
+        label={t("contact.detail.labels.title")}
+      >
+        <Select
+          mode="multiple"
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder={t("contact.detail.labels.select_placeholder")}
+          options={sortedLabels.flatMap((label) =>
+            label.id === undefined
+              ? []
+              : [{ label: label.name ?? "", value: label.id }],
+          )}
+        />
+      </Form.Item>
+      {allLabels.length === 0 && (
+        <div style={{ marginTop: -16, marginBottom: 16 }}>
+          <Link to={`/vaults/${vaultId}/settings`}>
+            {t("contact.detail.manage_labels_hint")}
+          </Link>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Module type → component mapping for dynamic section rendering.
+// The identity hero stays fixed for navigation and primary contact actions.
 const MODULE_COMPONENT_MAP: Record<
   string,
-  React.ComponentType<{ vaultId: string; contactId: string; [key: string]: unknown }>
+  React.ComponentType<{
+    vaultId: string;
+    contactId: string;
+    [key: string]: unknown;
+  }>
 > = {
   notes: NotesModule,
   labels: LabelsModule,
@@ -127,12 +362,384 @@ const MODULE_COMPONENT_MAP: Record<
   loans: LoansModule,
   gifts: GiftsModule,
   goals: GoalsModule,
-  life_events: LifeEventsModule,
+  activities: ActivitiesModule,
   groups: GroupsModule,
   photos: PhotosModule,
   documents: DocumentsModule,
   feed: FeedModule,
+  contact_summary: ContactSummaryModule,
+  relationship_network: RelationshipNetworkModule,
 };
+
+type ContactSectionLayoutProps = {
+  readonly pages: ContactTabPage[];
+  readonly targetSectionKey: string | null;
+  readonly targetContext: string | null;
+  readonly renderPage: (page: ContactTabPage) => React.ReactNode;
+};
+
+function ContactSectionLayout({
+  pages,
+  targetSectionKey,
+  targetContext,
+  renderPage,
+}: ContactSectionLayoutProps) {
+  const { t } = useTranslation();
+  const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const scrolledTargetRef = useRef<string | null>(null);
+  // Every navigation supersedes the previous one. This token stops an older
+  // lazy-module wait or scroll-settling watcher from snapping the page back
+  // after the reader has already selected a different destination.
+  const navigationRequestRef = useRef(0);
+  const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
+  const [loadedSectionKeys, setLoadedSectionKeys] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const pageEntries = useMemo(
+    () =>
+      pages.map((page, index) => ({
+        key: contactSectionKey(page, index),
+        page,
+      })),
+    [pages],
+  );
+  const sectionIdentity = pageEntries.map((entry) => entry.key).join("|");
+  const validActiveSectionKey = pageEntries.some(
+    (entry) => entry.key === activeSectionKey,
+  )
+    ? activeSectionKey
+    : null;
+  const currentSectionKey =
+    validActiveSectionKey ?? targetSectionKey ?? pageEntries[0]?.key ?? null;
+  const IntersectionObserverConstructor = window.IntersectionObserver;
+  const canObserve = typeof IntersectionObserverConstructor === "function";
+
+  const getSectionNodes = useCallback(
+    (): HTMLElement[] =>
+      Array.from(
+        containerRef.current?.querySelectorAll<HTMLElement>(
+          "[data-contact-section-key]",
+        ) ?? [],
+      ),
+    [],
+  );
+
+  // Marks a section current and makes sure it is mounted, without moving the
+  // page. Kept separate from scrolling so that jumping to a card does not also
+  // start a competing smooth scroll to the top of its section.
+  const openSection = (key: string) => {
+    setActiveSectionKey(key);
+    setLoadedSectionKeys((current) => {
+      if (current.has(key)) return current;
+      const next = new Set(current);
+      next.add(key);
+      return next;
+    });
+  };
+
+  const jumpToSection = (key: string) => {
+    const requestID = ++navigationRequestRef.current;
+    openSection(key);
+    const section = getSectionNodes().find(
+      (node) => node.dataset.contactSectionKey === key,
+    );
+    if (section) {
+      settleIntoView(section, () => navigationRequestRef.current === requestID);
+    }
+  };
+
+  // Scrolls to one card within a section. Sections below the fold are not
+  // rendered until they are needed, so the card may not exist yet — hence the
+  // few frames of grace before giving up.
+  const jumpToModule = (sectionKey: string, moduleKey: string) => {
+    const requestID = ++navigationRequestRef.current;
+    openSection(sectionKey);
+    let attempts = 0;
+    const scrollWhenReady = () => {
+      if (navigationRequestRef.current !== requestID) return;
+      const node = containerRef.current?.querySelector<HTMLElement>(
+        `[data-contact-module-key="${moduleKey}"]`,
+      );
+      if (node) {
+        settleIntoView(node, () => navigationRequestRef.current === requestID);
+        return;
+      }
+      if (attempts++ < 10) requestAnimationFrame(scrollWhenReady);
+    };
+    requestAnimationFrame(scrollWhenReady);
+  };
+
+  useEffect(() => {
+    if (!canObserve || pageEntries.length === 0) return;
+
+    const nodes = getSectionNodes();
+    const loadObserver = new IntersectionObserverConstructor(
+      (entries) => {
+        const newlyVisible = entries.flatMap((entry) => {
+          const key = (entry.target as HTMLElement).dataset.contactSectionKey;
+          return entry.isIntersecting && key ? [key] : [];
+        });
+        if (newlyVisible.length === 0) return;
+        setLoadedSectionKeys((current) => {
+          if (newlyVisible.every((key) => current.has(key))) return current;
+          const next = new Set(current);
+          for (const key of newlyVisible) next.add(key);
+          return next;
+        });
+      },
+      { rootMargin: "400px 0px", threshold: 0.01 },
+    );
+    const visibleSections = new Map<Element, IntersectionObserverEntry>();
+    const activeObserver = new IntersectionObserverConstructor(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            visibleSections.set(entry.target, entry);
+          } else {
+            visibleSections.delete(entry.target);
+          }
+        }
+        const visible = Array.from(visibleSections.values())
+          .sort(
+            (left, right) =>
+              Math.abs(left.boundingClientRect.top - 132) -
+              Math.abs(right.boundingClientRect.top - 132),
+          );
+        const key = (visible[0]?.target as HTMLElement | undefined)?.dataset
+          .contactSectionKey;
+        if (key) setActiveSectionKey(key);
+      },
+      {
+        rootMargin: "-120px 0px -55% 0px",
+        threshold: [0.01, 0.25, 0.5, 0.75],
+      },
+    );
+
+    for (const node of nodes) {
+      loadObserver.observe(node);
+      activeObserver.observe(node);
+    }
+    return () => {
+      loadObserver.disconnect();
+      activeObserver.disconnect();
+    };
+  }, [
+    IntersectionObserverConstructor,
+    canObserve,
+    getSectionNodes,
+    pageEntries.length,
+    sectionIdentity,
+  ]);
+
+  useEffect(() => {
+    if (
+      !targetSectionKey ||
+      !targetContext ||
+      scrolledTargetRef.current === targetContext
+    ) {
+      return;
+    }
+    const section = getSectionNodes().find(
+      (node) => node.dataset.contactSectionKey === targetSectionKey,
+    );
+    if (!section) return;
+    navigationRequestRef.current += 1;
+    scrolledTargetRef.current = targetContext;
+    section.scrollIntoView({ behavior: "auto", block: "start" });
+  }, [getSectionNodes, sectionIdentity, targetContext, targetSectionKey]);
+
+  if (pageEntries.length === 0) return null;
+
+  const compactNavigation = !screens.lg;
+  const navigation = compactNavigation ? (
+    <div
+      style={{
+        position: "sticky",
+        top: 116,
+        zIndex: 30,
+        padding: "8px 0 12px",
+        background: token.colorBgLayout,
+      }}
+    >
+      <Select
+        id="contact-section-navigation"
+        aria-label={t("contact.detail.jump_to_section")}
+        value={currentSectionKey ?? undefined}
+        onChange={jumpToSection}
+        options={pageEntries.map((entry) => ({
+          value: entry.key,
+          label: entry.page.name ?? entry.page.slug ?? "",
+        }))}
+        style={{ width: "100%" }}
+      />
+    </div>
+  ) : (
+    <nav
+      aria-label={t("contact.detail.section_navigation")}
+      style={{
+        position: "sticky",
+        top: 124,
+        alignSelf: "start",
+        maxHeight: "calc(100vh - 148px)",
+        overflowY: "auto",
+        padding: 8,
+        borderRadius: token.borderRadiusLG,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        background: token.colorBgContainer,
+      }}
+    >
+      <Text
+        type="secondary"
+        style={{ display: "block", padding: "6px 8px 8px", fontSize: 12 }}
+      >
+        {t("contact.detail.section_navigation")}
+      </Text>
+      <Space orientation="vertical" size={2} style={{ width: "100%" }}>
+        {pageEntries.map((entry) => {
+          const active = entry.key === currentSectionKey;
+          // Only the section being read is expanded into its cards: showing
+          // every card of every section would be a wall of forty links, and the
+          // point of this nav is to be scannable.
+          //
+          // A lone card that just restates its section's name is dropped —
+          // "Activities > Activities" tells the reader nothing, and repeating
+          // the name puts two identically labelled buttons in one navigation,
+          // which is ambiguous to a screen reader and to anything selecting by
+          // accessible name. Sections whose single card is named differently
+          // ("Summary" holding "Contact summary") still expand: suppressing
+          // every single-card section made the control look broken, because in
+          // a default layout five of the eight sections hold one card.
+          const cards = active ? sectionNavCards(entry.page) : [];
+          return (
+            <div key={entry.key} style={{ width: "100%" }}>
+              <Button
+                type="text"
+                block
+                aria-current={active ? "location" : undefined}
+                onClick={() => jumpToSection(entry.key)}
+                style={{
+                  height: "auto",
+                  minHeight: 34,
+                  padding: "7px 10px",
+                  textAlign: "left",
+                  justifyContent: "flex-start",
+                  whiteSpace: "normal",
+                  lineHeight: 1.35,
+                  color: active ? token.colorPrimary : token.colorTextSecondary,
+                  background: active ? token.colorPrimaryBg : undefined,
+                  fontWeight: active ? 600 : 400,
+                }}
+              >
+                {entry.page.name ?? entry.page.slug ?? ""}
+              </Button>
+              {cards.length > 0 && (
+                <div
+                  style={{
+                    marginLeft: 10,
+                    paddingLeft: 8,
+                    borderLeft: `1px solid ${token.colorSplit}`,
+                  }}
+                >
+                  {cards.map((card) => (
+                    <Button
+                      key={card.id}
+                      type="text"
+                      block
+                      onClick={() => jumpToModule(entry.key, `mod-${card.id}`)}
+                      style={{
+                        height: "auto",
+                        minHeight: 26,
+                        padding: "4px 8px",
+                        textAlign: "left",
+                        justifyContent: "flex-start",
+                        whiteSpace: "normal",
+                        lineHeight: 1.3,
+                        fontSize: 12,
+                        color: token.colorTextTertiary,
+                      }}
+                    >
+                      {card.name ?? card.type ?? ""}
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </Space>
+    </nav>
+  );
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: compactNavigation
+          ? "minmax(0, 1fr)"
+          : "190px minmax(0, 1fr)",
+        gap: compactNavigation ? 0 : 24,
+        alignItems: "start",
+      }}
+    >
+      {navigation}
+      <div ref={containerRef}>
+        {pageEntries.map((entry, index) => {
+          const headingID = `contact-section-heading-${entry.page.id ?? index}`;
+          const shouldRender =
+            !canObserve ||
+            index === 0 ||
+            entry.key === targetSectionKey ||
+            loadedSectionKeys.has(entry.key);
+          return (
+            <section
+              key={entry.key}
+              data-contact-section-key={entry.key}
+              aria-labelledby={headingID}
+              aria-busy={!shouldRender}
+              style={{
+                scrollMarginTop: compactNavigation
+                  ? COMPACT_SECTION_ANCHOR_MARGIN
+                  : SECTION_ANCHOR_MARGIN,
+                marginBottom: index === pageEntries.length - 1 ? 0 : 40,
+                minWidth: 0,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  marginBottom: 16,
+                  paddingBottom: 10,
+                  borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                }}
+              >
+                <Title id={headingID} level={4} style={{ margin: 0 }}>
+                  {entry.page.name ?? entry.page.slug ?? ""}
+                </Title>
+              </div>
+              {shouldRender ? (
+                renderPage(entry.page)
+              ) : (
+                <div
+                  style={{
+                    minHeight: 180,
+                    display: "grid",
+                    placeItems: "center",
+                  }}
+                >
+                  <Spin size="small" />
+                </div>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export default function ContactDetail() {
   const { id, contactId } = useParams<{ id: string; contactId: string }>();
@@ -144,12 +751,13 @@ export default function ContactDetail() {
   const { message } = App.useApp();
   const { t } = useTranslation();
   const { token } = theme.useToken();
-  const nameOrder = useVaultNameOrder(vaultId);
+  const detailScreens = Grid.useBreakpoint();
+  const nameOrder = useNameOrder();
   const dateFormats = useDateFormat();
-  const [viewMode, setViewMode] = useState<"read" | "edit">("read");
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isMoveModalOpen, setIsMoveModalOpen] = useState(false);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
+  const [isLayoutDrawerOpen, setIsLayoutDrawerOpen] = useState(false);
   const [avatarKey, setAvatarKey] = useState(0);
   const [editForm] = Form.useForm();
   const [moveForm] = Form.useForm();
@@ -159,10 +767,23 @@ export default function ContactDetail() {
   const { data: contact, isLoading } = useQuery({
     queryKey: ["vaults", vaultId, "contacts", cId],
     queryFn: async () => {
-      const res = await api.contacts.contactsDetail(String(vaultId), String(cId));
+      const contactScope = createContactQueryScope(vaultId, cId);
+      const res = await api.contacts.contactsDetail(
+        contactScope.vaultId,
+        contactScope.contactId,
+      );
+      await refreshMostConsultedProjections(queryClient, [
+        { vaultId: contactScope.vaultId },
+      ]);
       return res.data!;
     },
     enabled: !!vaultId && !!cId,
+  });
+
+  const { data: currentVault } = useQuery<Vault>({
+    queryKey: ["vaults", vaultId],
+    queryFn: async () => (await api.vaults.vaultsDetail(String(vaultId))).data!,
+    enabled: !!vaultId,
   });
 
   const { data: vaults = [] } = useQuery({
@@ -175,10 +796,10 @@ export default function ContactDetail() {
     enabled: isMoveModalOpen,
   });
 
-  const { data: templates = [] } = useQuery<PersonalizeItem[]>({
-    queryKey: ["settings", "personalize", "templates"],
+  const { data: templates = [] } = useQuery<ContactLayoutTemplateSummary[]>({
+    queryKey: ["vaults", vaultId, "contact-layout", "templates"],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail("templates");
+      const res = await api.contactLayouts.contactLayoutTemplatesList(vaultId);
       return res.data ?? [];
     },
     enabled: isTemplateModalOpen,
@@ -187,34 +808,102 @@ export default function ContactDetail() {
   const { data: tabsData } = useQuery<ContactTabsResponse>({
     queryKey: ["vaults", vaultId, "contacts", cId, "tabs"],
     queryFn: async () => {
-      const res = await api.contacts.contactsTabsList(String(vaultId), String(cId));
+      const res = await api.contacts.contactsTabsList(
+        String(vaultId),
+        String(cId),
+      );
       return res.data!;
     },
     enabled: !!vaultId && !!cId && !!contact,
   });
 
-  const { data: metThroughContacts = [], isLoading: isMetThroughContactsLoading } = useQuery<Contact[]>({
+  const {
+    data: metThroughContacts = [],
+    isLoading: isMetThroughContactsLoading,
+  } = useQuery<Contact[]>({
     queryKey: ["vaults", vaultId, "contacts", "meeting-select"],
     queryFn: async () => {
-      const res = await api.contacts.contactsList(String(vaultId), { per_page: 9999, filter: "all" });
+      const res = await api.contacts.contactsList(String(vaultId), {
+        per_page: 9999,
+        filter: "all",
+      });
       return res.data ?? [];
     },
     enabled: isEditModalOpen,
   });
 
   const updateContactMutation = useMutation({
-    mutationFn: (values: UpdateContactRequest) =>
-      api.contacts.contactsUpdate(String(vaultId), String(cId), values),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts", cId],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts"],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "catchUp"],
-      });
+    mutationFn: async (operation: UpdateContactMutationOperation) => {
+      const response = await api.contacts.contactsUpdate(
+        operation.contact.vaultId,
+        operation.contact.contactId,
+        operation.request,
+      );
+      if (operation.labelIds === undefined) return response;
+
+      const currentAssignments =
+        queryClient.getQueryData<ContactLabel[]>(
+          contactLabelAssignmentsQueryKey(
+            operation.contact.vaultId,
+            operation.contact.contactId,
+          ),
+        ) ?? [];
+      const syncPlan = buildContactLabelSyncPlan(
+        currentAssignments,
+        operation.labelIds,
+      );
+      try {
+        await Promise.all([
+          ...syncPlan.addLabelIds.map((labelId) =>
+            api.contactLabels.contactsLabelsCreate(
+              operation.contact.vaultId,
+              operation.contact.contactId,
+              { label_id: labelId },
+            ),
+          ),
+          ...syncPlan.removeAssignmentIds.map((assignmentId) =>
+            api.contactLabels.contactsLabelsDelete(
+              operation.contact.vaultId,
+              operation.contact.contactId,
+              assignmentId,
+            ),
+          ),
+        ]);
+      } catch (error) {
+        await invalidateContactQueries(queryClient, [
+          operation.contact.vaultId,
+        ]);
+        throw error;
+      }
+      return response;
+    },
+    onSuccess: async (_, operation) => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: [
+            "vaults",
+            operation.contact.vaultId,
+            "contacts",
+            operation.contact.contactId,
+          ],
+        }),
+        invalidateContactQueries(queryClient, [operation.contact.vaultId]),
+        invalidateFeedQueries(queryClient, {
+          vaultIds: [operation.contact.vaultId],
+          contacts: [operation.contact],
+        }),
+        invalidateCalendarQueries(queryClient, {
+          vaultIds: [operation.contact.vaultId],
+          contacts: [operation.contact],
+        }),
+        invalidateReminderQueries(queryClient, {
+          vaultIds: [operation.contact.vaultId],
+          contacts: [operation.contact],
+        }),
+        refreshMostConsultedProjections(queryClient, [
+          { vaultId: operation.contact.vaultId },
+        ]),
+      ]);
       message.success(t("contact.detail.edit_success"));
       setIsEditModalOpen(false);
     },
@@ -224,14 +913,31 @@ export default function ContactDetail() {
   });
 
   const promoteRelationshipContactMutation = useMutation({
-    mutationFn: (request: UpdateContactRequest) => api.contacts.contactsUpdate(String(vaultId), String(cId), request),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts", cId],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts"],
-      });
+    mutationFn: (operation: UpdateContactMutationOperation) =>
+      api.contacts.contactsUpdate(
+        operation.contact.vaultId,
+        operation.contact.contactId,
+        operation.request,
+      ),
+    onSuccess: async (_, operation) => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: [
+            "vaults",
+            operation.contact.vaultId,
+            "contacts",
+            operation.contact.contactId,
+          ],
+        }),
+        invalidateContactQueries(queryClient, [operation.contact.vaultId]),
+        invalidateFeedQueries(queryClient, {
+          vaultIds: [operation.contact.vaultId],
+          contacts: [operation.contact],
+        }),
+        refreshMostConsultedProjections(queryClient, [
+          { vaultId: operation.contact.vaultId },
+        ]),
+      ]);
       message.success(t("contact.needs_verification.promoted"));
     },
     onError: (err: APIError) => {
@@ -240,7 +946,8 @@ export default function ContactDetail() {
   });
 
   const markCaughtUpMutation = useMutation({
-    mutationFn: () => api.contacts.contactsCatchUpCreate(String(vaultId), String(cId)),
+    mutationFn: () =>
+      api.contacts.contactsCatchUpCreate(String(vaultId), String(cId)),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["vaults", vaultId, "contacts", cId],
@@ -260,7 +967,9 @@ export default function ContactDetail() {
 
   const updateTemplateMutation = useMutation({
     mutationFn: (templateId: number) =>
-      api.contacts.contactsTemplateUpdate(String(vaultId), String(cId), { template_id: templateId }),
+      api.contacts.contactsTemplateUpdate(String(vaultId), String(cId), {
+        template_id: templateId,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["vaults", vaultId, "contacts", cId],
@@ -274,13 +983,39 @@ export default function ContactDetail() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () => api.contacts.contactsDelete(String(vaultId), String(cId)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts"],
-      });
+    mutationFn: (operation: DeleteContactMutationOperation) =>
+      api.contacts.contactsDelete(
+        operation.contact.vaultId,
+        operation.contact.contactId,
+      ),
+    onSuccess: async (_, operation) => {
+      const invalidationFilters = { refetchType: "none" } as const;
+
+      removeContactFromVaultListCaches(queryClient, operation.contact);
+      await Promise.all([
+        invalidateContactQueries(
+          queryClient,
+          [operation.contact.vaultId],
+          invalidationFilters,
+        ),
+        invalidateFeedQueries(
+          queryClient,
+          { vaultIds: [operation.contact.vaultId], contacts: [] },
+          invalidationFilters,
+        ),
+        refreshMostConsultedProjections(
+          queryClient,
+          [
+            {
+              vaultId: operation.contact.vaultId,
+              evictContactIds: [operation.contact.contactId],
+            },
+          ],
+          invalidationFilters,
+        ),
+      ]);
       message.success(t("contact.detail.deleted_success"));
-      navigate(contactListUrl);
+      navigate(operation.contactListUrl);
     },
     onError: (err: APIError) => {
       message.error(err.message || t("contact.detail.delete_failed"));
@@ -288,7 +1023,8 @@ export default function ContactDetail() {
   });
 
   const toggleFavoriteMutation = useMutation({
-    mutationFn: () => api.contacts.contactsFavoriteUpdate(String(vaultId), String(cId)),
+    mutationFn: () =>
+      api.contacts.contactsFavoriteUpdate(String(vaultId), String(cId)),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["vaults", vaultId, "contacts", cId],
@@ -300,14 +1036,31 @@ export default function ContactDetail() {
   });
 
   const toggleArchiveMutation = useMutation({
-    mutationFn: () => api.contacts.contactsArchiveUpdate(String(vaultId), String(cId)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts", cId],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts"],
-      });
+    mutationFn: (operation: ContactMutationOperation) =>
+      api.contacts.contactsArchiveUpdate(
+        operation.contact.vaultId,
+        operation.contact.contactId,
+      ),
+    onSuccess: async (response, operation) => {
+      const projectionChange = response.data?.is_archived
+        ? {
+            vaultId: operation.contact.vaultId,
+            evictContactIds: [operation.contact.contactId],
+          }
+        : { vaultId: operation.contact.vaultId };
+
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: [
+            "vaults",
+            operation.contact.vaultId,
+            "contacts",
+            operation.contact.contactId,
+          ],
+        }),
+        invalidateContactQueries(queryClient, [operation.contact.vaultId]),
+        refreshMostConsultedProjections(queryClient, [projectionChange]),
+      ]);
     },
     onError: (err: APIError) => {
       message.error(err.message || t("contact.detail.delete_failed"));
@@ -315,15 +1068,31 @@ export default function ContactDetail() {
   });
 
   const avatarUploadMutation = useMutation({
-    mutationFn: (file: File) =>
-      api.contacts.contactsAvatarUpdate(String(vaultId), String(cId), {
-        file: file as unknown as File,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts", cId],
-      });
-      setAvatarKey((k) => k + 1);
+    mutationFn: (operation: AvatarUploadMutationOperation) =>
+      api.contacts.contactsAvatarUpdate(
+        operation.contact.vaultId,
+        operation.contact.contactId,
+        { file: operation.file },
+      ),
+    onSuccess: async (_, operation) => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: [
+            "vaults",
+            operation.contact.vaultId,
+            "contacts",
+            operation.contact.contactId,
+          ],
+        }),
+        invalidateFeedQueries(queryClient, {
+          vaultIds: [operation.contact.vaultId],
+          contacts: [operation.contact],
+        }),
+        refreshMostConsultedProjections(queryClient, [
+          { vaultId: operation.contact.vaultId },
+        ]),
+      ]);
+      setAvatarKey((key) => key + 1);
       message.success(t("contact.detail.avatar_updated"));
     },
     onError: (err: APIError) => {
@@ -332,12 +1101,21 @@ export default function ContactDetail() {
   });
 
   const avatarDeleteMutation = useMutation({
-    mutationFn: () => api.contacts.contactsAvatarDelete(String(vaultId), String(cId)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts", cId],
+    mutationFn: (operation: ContactMutationOperation) =>
+      api.contacts.contactsAvatarDelete(
+        operation.contact.vaultId,
+        operation.contact.contactId,
+      ),
+    onSuccess: async (_, operation) => {
+      await queryClient.invalidateQueries({
+        queryKey: [
+          "vaults",
+          operation.contact.vaultId,
+          "contacts",
+          operation.contact.contactId,
+        ],
       });
-      setAvatarKey((k) => k + 1);
+      setAvatarKey((key) => key + 1);
       message.success(t("contact.detail.avatar_deleted"));
     },
     onError: (err: APIError) => {
@@ -346,22 +1124,90 @@ export default function ContactDetail() {
   });
 
   const moveContactMutation = useMutation({
-    mutationFn: (targetVaultId: string) =>
-      api.contacts.contactsMoveCreate(String(vaultId), String(cId), {
-        target_vault_id: targetVaultId,
-      }),
-    onSuccess: (_, targetVaultId) => {
-      queryClient.invalidateQueries({
-        queryKey: ["vaults", vaultId, "contacts"],
-      });
+    mutationFn: (operation: MoveContactMutationOperation) =>
+      api.contacts.contactsMoveCreate(
+        operation.source.vaultId,
+        operation.source.contactId,
+        {
+          target_vault_id: operation.target.vaultId,
+        },
+      ),
+    onSuccess: async (_, operation) => {
+      const affectedScopes = {
+        vaultIds: [operation.source.vaultId, operation.target.vaultId],
+        contacts: [operation.source, operation.target],
+      } satisfies QueryInvalidationScopes;
+      const moveInvalidationFilters = { refetchType: "none" } as const;
+
+      // Use only the submitted operation because route and form state may change while the move is pending.
+      // Remove the stale source row before invalidation; otherwise returning to the list can request its old Vault avatar URL.
+      removeContactFromVaultListCaches(queryClient, operation.source);
+      // Suppress active refetches until navigation removes the moved source contact queries.
+      await Promise.all([
+        invalidateContactQueries(
+          queryClient,
+          affectedScopes.vaultIds,
+          moveInvalidationFilters,
+        ),
+        invalidateVaultTaskImpactQueries(
+          queryClient,
+          affectedScopes.vaultIds,
+          moveInvalidationFilters,
+        ),
+        invalidateFeedQueries(
+          queryClient,
+          affectedScopes,
+          moveInvalidationFilters,
+        ),
+        invalidateCalendarQueries(
+          queryClient,
+          affectedScopes,
+          moveInvalidationFilters,
+        ),
+        invalidateReminderQueries(
+          queryClient,
+          affectedScopes,
+          moveInvalidationFilters,
+        ),
+        refreshMostConsultedProjections(
+          queryClient,
+          [
+            {
+              vaultId: operation.source.vaultId,
+              evictContactIds: [operation.source.contactId],
+            },
+            { vaultId: operation.target.vaultId },
+          ],
+          moveInvalidationFilters,
+        ),
+      ]);
       message.success(t("contact.detail.move_success"));
       setIsMoveModalOpen(false);
-      navigate(`/vaults/${targetVaultId}/contacts/${cId}`);
+      navigate(
+        `/vaults/${operation.target.vaultId}/contacts/${operation.target.contactId}`,
+      );
     },
     onError: (err: APIError) => {
       message.error(err.message || t("common.error"));
     },
   });
+
+  function submitMoveContact(targetVaultId: string | number): void {
+    const source = Object.freeze({
+      vaultId: String(vaultId),
+      contactId: String(cId),
+    } satisfies ContactQueryScope);
+    const target = Object.freeze({
+      vaultId: String(targetVaultId),
+      contactId: source.contactId,
+    } satisfies ContactQueryScope);
+    moveContactMutation.mutate(
+      Object.freeze({
+        source,
+        target,
+      } satisfies MoveContactMutationOperation),
+    );
+  }
 
   if (isLoading) {
     return (
@@ -373,42 +1219,197 @@ export default function ContactDetail() {
 
   if (!contact) return null;
 
+  async function openEditContactModal(): Promise<void> {
+    let assignedLabels: ContactLabel[];
+    try {
+      assignedLabels = await queryClient.fetchQuery({
+        queryKey: contactLabelAssignmentsQueryKey(vaultId, cId),
+        queryFn: async () => {
+          const response = await api.contactLabels.contactsLabelsList(
+            vaultId,
+            cId,
+          );
+          return response.data ?? [];
+        },
+      });
+    } catch (error) {
+      message.error(
+        error instanceof Error && error.message
+          ? error.message
+          : t("common.error"),
+      );
+      return;
+    }
+
+    editForm.setFieldsValue({
+      prefix: contact.prefix,
+      first_name: contact.first_name,
+      middle_name: contact.middle_name,
+      last_name: contact.last_name,
+      suffix: contact.suffix,
+      nickname: contact.nickname,
+      maiden_name: contact.maiden_name,
+      gender_id: contact.gender_id,
+      pronoun_id: contact.pronoun_id,
+      first_met: contactFirstMetToCalendarDate(contact),
+      first_met_through_contact_id: contact.first_met_through_contact_id,
+      last_talked_to: timestampToDateInput(contact.last_talked_to),
+      stay_in_touch_frequency_days: contact.stay_in_touch_frequency_days,
+      needs_verification: contact.needs_verification,
+      important_dates: importantDatesToDrafts(contact.important_dates),
+      label_ids: assignedLabels.flatMap((label) =>
+        label.label_id === undefined ? [] : [label.label_id],
+      ),
+    });
+    setIsEditModalOpen(true);
+  }
+
   const initials = formatContactInitials(nameOrder, contact);
   const moduleProps = {
     vaultId,
     contactId: cId,
+    contact,
     currentContactName: formatContactName(nameOrder, contact),
   };
+  const fallbackPages: ContactTabPage[] = [
+    {
+      id: 1,
+      name: t("contact.detail.view_mode"),
+      slug: "summary",
+      modules: [{ id: 1, type: "contact_summary" }],
+    },
+    {
+      id: 2,
+      name: t("contact.detail.tabs.overview"),
+      slug: "contact",
+      type: "contact",
+      modules: [
+        { id: 2, type: "important_dates" },
+        { id: 3, type: "labels" },
+        { id: 4, type: "quick_facts" },
+        { id: 5, type: "religion" },
+        { id: 6, type: "jobs" },
+        { id: 7, type: "addresses" },
+        { id: 8, type: "contact_information" },
+      ],
+    },
+    {
+      id: 3,
+      name: t("contact.detail.feed.title"),
+      slug: "feed",
+      modules: [{ id: 23, type: "feed" }],
+    },
+    {
+      id: 4,
+      name: t("contact.detail.tabs.relationships"),
+      slug: "social",
+      modules: [
+        { id: 9, type: "relationships" },
+        { id: 10, type: "pets" },
+        { id: 11, type: "groups" },
+      ],
+    },
+    {
+      id: 5,
+      name: t("contact.detail.summary.network"),
+      slug: "relationship-network",
+      modules: [{ id: 12, type: "relationship_network" }],
+    },
+    {
+      id: 6,
+      name: t("contact.detail.tabs.activities"),
+      slug: "activities",
+      modules: [{ id: 13, type: "activities" }],
+    },
+    {
+      id: 7,
+      name: t("contact.detail.tabs.goals"),
+      slug: "goals",
+      modules: [{ id: 14, type: "goals" }],
+    },
+    {
+      id: 8,
+      name: t("contact.detail.tabs.information"),
+      slug: "information",
+      modules: [
+        { id: 15, type: "documents" },
+        { id: 16, type: "photos" },
+        { id: 17, type: "notes" },
+        { id: 18, type: "reminders" },
+        { id: 19, type: "loans" },
+        { id: 20, type: "gifts" },
+        { id: 21, type: "tasks" },
+        { id: 22, type: "calls" },
+      ],
+    },
+  ];
+  const sectionPages = tabsData ? (tabsData.pages ?? []) : fallbackPages;
+  const requestedSourceFocus = parseContactSourceFocus(location.search);
+  const targetSectionKey = requestedSourceFocus
+    ? findTargetSectionKey(requestedSourceFocus.source, sectionPages)
+    : null;
+  const sourceTarget = targetSectionKey
+    ? requestedSourceFocus?.source
+    : undefined;
+  const targetContext =
+    sourceTarget && targetSectionKey
+      ? `${sourceTarget.kind}:${sourceTarget.id}:${targetSectionKey}`
+      : null;
 
   // Compact overview card — only shows fields that have values,
   // timestamps rendered as subtle footer text to save vertical space.
   const overviewFields = [
-    contact.prefix && { label: t("contact.detail.prefix"), value: contact.prefix },
+    contact.prefix && {
+      label: t("contact.detail.prefix"),
+      value: contact.prefix,
+    },
     { label: t("contact.detail.first_name"), value: contact.first_name },
-    contact.middle_name && { label: t("contact.detail.middle_name"), value: contact.middle_name },
-    contact.last_name && { label: t("contact.detail.last_name"), value: contact.last_name },
-    contact.suffix && { label: t("contact.detail.suffix"), value: contact.suffix },
-    contact.nickname && { label: t("contact.detail.nickname"), value: `\u201C${contact.nickname}\u201D` },
-    contact.maiden_name && { label: t("contact.detail.maiden_name"), value: contact.maiden_name },
+    contact.middle_name && {
+      label: t("contact.detail.middle_name"),
+      value: contact.middle_name,
+    },
+    contact.last_name && {
+      label: t("contact.detail.last_name"),
+      value: contact.last_name,
+    },
+    contact.suffix && {
+      label: t("contact.detail.suffix"),
+      value: contact.suffix,
+    },
+    contact.nickname && {
+      label: t("contact.detail.nickname"),
+      value: `\u201C${contact.nickname}\u201D`,
+    },
+    contact.maiden_name && {
+      label: t("contact.detail.maiden_name"),
+      value: contact.maiden_name,
+    },
     (() => {
       const firstMetLabel = formatContactFirstMetDisplay(contact, dateFormats);
-      return firstMetLabel ? { label: t("contact.meeting.first_met_at"), value: firstMetLabel } : null;
+      return firstMetLabel
+        ? { label: t("contact.meeting.first_met_at"), value: firstMetLabel }
+        : null;
     })(),
   ].filter(Boolean) as { label: string; value: string }[];
 
   const metThroughContact = contact.first_met_through_contact;
 
   const stayInTouchSummary = [
-    contact.last_talked_to && t("contact.catch_up.last_contact_summary", {
-      date: formatDateOnly(contact.last_talked_to, dateFormats),
-    }),
-    contact.stay_in_touch_frequency_days && t("contact.catch_up.frequency_summary", {
-      days: contact.stay_in_touch_frequency_days,
-    }),
-    contact.stay_in_touch_trigger_date && t("contact.catch_up.next_due_summary", {
-      date: formatDateOnly(contact.stay_in_touch_trigger_date, dateFormats),
-    }),
-  ].filter(Boolean).join(" · ");
+    contact.last_talked_to &&
+      t("contact.catch_up.last_contact_summary", {
+        date: formatDateOnly(contact.last_talked_to, dateFormats),
+      }),
+    contact.stay_in_touch_frequency_days &&
+      t("contact.catch_up.frequency_summary", {
+        days: contact.stay_in_touch_frequency_days,
+      }),
+    contact.stay_in_touch_trigger_date &&
+      t("contact.catch_up.next_due_summary", {
+        date: formatDateOnly(contact.stay_in_touch_trigger_date, dateFormats),
+      }),
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const stayInTouchPanel = stayInTouchSummary ? (
     <div
@@ -443,19 +1444,42 @@ export default function ContactDetail() {
 
   const overviewCard = (
     <Card size="small" styles={{ body: { padding: "12px 16px" } }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: "6px 24px" }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+          gap: "6px 24px",
+        }}
+      >
         {overviewFields.map((f) => (
-          <div key={f.label} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
-            <Text type="secondary" style={{ fontSize: 13, flexShrink: 0 }}>{f.label}:</Text>
+          <div
+            key={f.label}
+            style={{ display: "flex", gap: 8, alignItems: "baseline" }}
+          >
+            <Text type="secondary" style={{ fontSize: 13, flexShrink: 0 }}>
+              {f.label}:
+            </Text>
             <Text style={{ fontSize: 13 }}>{f.value}</Text>
           </div>
         ))}
       </div>
-      <div style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+      <div
+        style={{
+          marginTop: 8,
+          display: "flex",
+          gap: 16,
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
         {contact.is_archived ? (
-          <Tag color="default" style={{ margin: 0 }}>{t("common.archived")}</Tag>
+          <Tag color="default" style={{ margin: 0 }}>
+            {t("common.archived")}
+          </Tag>
         ) : (
-          <Tag color="green" style={{ margin: 0 }}>{t("common.active")}</Tag>
+          <Tag color="green" style={{ margin: 0 }}>
+            {t("common.active")}
+          </Tag>
         )}
         {contact.needs_verification && (
           <Tag color="warning" style={{ margin: 0 }}>
@@ -473,7 +1497,8 @@ export default function ContactDetail() {
         <Text type="secondary" style={{ fontSize: 12 }}>
           {t("common.created")} {formatDate(contact.created_at, dateFormats)}
           {" · "}
-          {t("common.last_updated")} {formatDate(contact.updated_at, dateFormats)}
+          {t("common.last_updated")}{" "}
+          {formatDate(contact.updated_at, dateFormats)}
         </Text>
       </div>
     </Card>
@@ -484,10 +1509,10 @@ export default function ContactDetail() {
     const isContactPage = page.type === "contact";
 
     const children: React.ReactNode[] = [];
-    let extraInfoRendered = false;
-
     if (isContactPage) {
-      children.push(<React.Fragment key="overview-card">{overviewCard}</React.Fragment>);
+      children.push(
+        <React.Fragment key="overview-card">{overviewCard}</React.Fragment>,
+      );
     }
 
     for (const mod of modules) {
@@ -499,122 +1524,89 @@ export default function ContactDetail() {
       }
       if (isContactPage && moduleType === "quick_facts") {
         children.push(
-          <QuickFactsModule key={`mod-${mod.id}`} {...moduleProps} readOnly={viewMode === "read"} />,
+          <QuickFactsModule
+            key={`mod-${mod.id}`}
+            {...moduleProps}
+            readOnly={false}
+            target={
+              sourceTarget?.module === "quick_facts" ? sourceTarget : undefined
+            }
+          />,
         );
         continue;
       }
-      if (moduleType === "gender_pronoun" || moduleType === "religions" || moduleType === "company") {
-        if (!extraInfoRendered) {
-          extraInfoRendered = true;
-          children.push(
-            <ExtraInfoModule key="extra-info" {...moduleProps} contact={contact} />,
-          );
-        }
+      if (moduleType === "religion") {
+        children.push(
+          <ReligionModule
+            key={`mod-${mod.id}`}
+            {...moduleProps}
+            contact={contact}
+          />,
+        );
+        continue;
+      }
+      if (moduleType === "jobs") {
+        children.push(<JobsModule key={`mod-${mod.id}`} {...moduleProps} />);
         continue;
       }
 
       const Component = MODULE_COMPONENT_MAP[moduleType];
       if (Component) {
-        children.push(<Component key={`mod-${mod.id}`} {...moduleProps} />);
+        children.push(
+          <Component
+            key={`mod-${mod.id}`}
+            {...moduleProps}
+            target={
+              sourceTarget?.module === moduleType ? sourceTarget : undefined
+            }
+          />,
+        );
       }
     }
 
     if (children.length === 0) {
       return null;
     }
-    if (children.length === 1) {
-      return children[0];
+
+    // Each card is wrapped in an anchor carrying the key it was pushed with, so
+    // the section navigation can scroll straight to one card rather than only
+    // to the top of the page it lives on.
+    const anchored = children.map((child, index) => {
+      const key =
+        React.isValidElement(child) && child.key != null
+          ? String(child.key)
+          : `child-${index}`;
+      return (
+        <div
+          key={key}
+          data-contact-module-key={key}
+          style={{
+            scrollMarginTop: detailScreens.lg
+              ? SECTION_ANCHOR_MARGIN
+              : COMPACT_SECTION_ANCHOR_MARGIN,
+            minWidth: 0,
+          }}
+        >
+          {child}
+        </div>
+      );
+    });
+
+    if (anchored.length === 1) {
+      return anchored[0];
     }
     return (
       <Space direction="vertical" style={{ width: "100%" }} size={16}>
-        {children}
+        {anchored}
       </Space>
     );
   }
 
-  function buildDynamicTabs(data: ContactTabsResponse) {
-    return (data.pages ?? []).map((page) => ({
-      key: page.slug ?? String(page.id),
-      label: page.name ?? page.slug ?? "",
-      children: renderModulesForPage(page),
-    }));
-  }
-
-  const fallbackTabItems = [
-    {
-      key: "overview",
-      label: t("contact.detail.tabs.overview"),
-      children: (
-        <Space direction="vertical" style={{ width: "100%" }} size={16}>
-          {overviewCard}
-          <LabelsModule {...moduleProps} />
-          <QuickFactsModule {...moduleProps} readOnly={viewMode === "read"} />
-          <NotesModule {...moduleProps} readOnly={viewMode === "read"} />
-        </Space>
-      ),
-    },
-    {
-      key: "relationships",
-      label: t("contact.detail.tabs.relationships"),
-      children: <RelationshipsModule {...moduleProps} />,
-    },
-    {
-      key: "information",
-      label: t("contact.detail.tabs.information"),
-      children: (
-        <Space direction="vertical" style={{ width: "100%" }} size={16}>
-          <ContactInfoModule {...moduleProps} />
-          <AddressesModule {...moduleProps} />
-          <ImportantDatesModule {...moduleProps} />
-          <ExtraInfoModule {...moduleProps} contact={contact} />
-          <PetsModule {...moduleProps} />
-        </Space>
-      ),
-    },
-    {
-      key: "activities",
-      label: t("contact.detail.tabs.activities"),
-      children: (
-        <Space direction="vertical" style={{ width: "100%" }} size={16}>
-          <TasksModule {...moduleProps} />
-          <CallsModule {...moduleProps} />
-          <RemindersModule {...moduleProps} />
-          <LoansModule {...moduleProps} />
-          <GoalsModule {...moduleProps} />
-        </Space>
-      ),
-    },
-    {
-      key: "life",
-      label: t("contact.detail.tabs.life"),
-      children: (
-        <Space direction="vertical" style={{ width: "100%" }} size={16}>
-          <LifeEventsModule {...moduleProps} />
-        </Space>
-      ),
-    },
-    {
-      key: "photos",
-      label: t("contact.detail.tabs.photos_docs"),
-      children: (
-        <Space direction="vertical" style={{ width: "100%" }} size={16}>
-          <PhotosModule {...moduleProps} />
-          <DocumentsModule {...moduleProps} />
-        </Space>
-      ),
-    },
-    {
-      key: "feed",
-      label: t("contact.detail.feed.title"),
-      children: <FeedModule {...moduleProps} />,
-    },
-  ];
-
-  const tabItems = tabsData ? buildDynamicTabs(tabsData) : fallbackTabItems;
-  const isRelationshipOnlyHiddenContact = contact.needs_verification && !contact.listed;
+  const isRelationshipOnlyHiddenContact =
+    contact.needs_verification && !contact.listed;
 
   return (
-    <div style={{ maxWidth: 960, margin: "0 auto" }}>
+    <div style={{ maxWidth: 1180, margin: "0 auto" }}>
       <Button
         type="text"
         icon={<ArrowLeftOutlined />}
@@ -655,18 +1647,37 @@ export default function ContactDetail() {
                 boxShadow: `0 4px 12px ${token.colorPrimaryBorder}`,
               }}
             >
-              <AvatarImageLoader 
-                url={`/vaults/${vaultId}/contacts/${cId}/avatar?k=${avatarKey}`} 
+              <AvatarImageLoader
+                url={`/vaults/${vaultId}/contacts/${cId}/avatar?k=${avatarKey}`}
                 updatedAt={contact.updated_at ?? ""}
                 initials={initials}
                 token={token}
-                onUpload={(file) => avatarUploadMutation.mutate(file)}
-                onDelete={() => avatarDeleteMutation.mutate()}
+                onUpload={(file) =>
+                  avatarUploadMutation.mutate(
+                    Object.freeze({
+                      contact: createContactQueryScope(vaultId, cId),
+                      file,
+                    } satisfies AvatarUploadMutationOperation),
+                  )
+                }
+                onDelete={() =>
+                  avatarDeleteMutation.mutate(
+                    Object.freeze({
+                      contact: createContactQueryScope(vaultId, cId),
+                    } satisfies ContactMutationOperation),
+                  )
+                }
                 isUploading={avatarUploadMutation.isPending}
               />
             </div>
             <div style={{ minWidth: 0, paddingTop: 4 }}>
-              <Title level={2} style={{ margin: 0, fontFamily: "\x27Playfair Display\x27, serif" }}>
+              <Title
+                level={2}
+                style={{
+                  margin: 0,
+                  fontFamily: "\x27Playfair Display\x27, serif",
+                }}
+              >
                 {formatContactName(nameOrder, contact)}
               </Title>
               {contact.nickname && (
@@ -674,34 +1685,56 @@ export default function ContactDetail() {
                   &ldquo;{contact.nickname}&rdquo;
                 </Text>
               )}
-              <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <div
+                style={{
+                  marginTop: 6,
+                  display: "flex",
+                  gap: 6,
+                  flexWrap: "wrap",
+                }}
+              >
                 {contact.is_favorite && (
                   <Tag color="gold" icon={<StarFilled />}>
                     {t("contact.detail.favorite")}
                   </Tag>
                 )}
-                {contact.is_archived && <Tag color="default">{t("common.archived")}</Tag>}
+                {contact.is_archived && (
+                  <Tag color="default">{t("common.archived")}</Tag>
+                )}
                 {isRelationshipOnlyHiddenContact && (
                   <Button
                     size="small"
-                    onClick={() => promoteRelationshipContactMutation.mutate({
-                      first_name: contact.first_name ?? "",
-                      last_name: contact.last_name,
-                      middle_name: contact.middle_name,
-                      nickname: contact.nickname,
-                      maiden_name: contact.maiden_name,
-                      prefix: contact.prefix,
-                      suffix: contact.suffix,
-                      gender_id: contact.gender_id,
-                      pronoun_id: contact.pronoun_id,
-                      template_id: contact.template_id,
-                      listed: true,
-                      needs_verification: false,
-                      first_met_through_contact_id: contact.first_met_through_contact_id,
-                      ...buildContactFirstMetRequest(contactFirstMetToCalendarDate(contact)),
-                      last_talked_to: dateInputToTimestamp(timestampToDateInput(contact.last_talked_to)),
-                      stay_in_touch_frequency_days: contact.stay_in_touch_frequency_days,
-                    })}
+                    onClick={() =>
+                      promoteRelationshipContactMutation.mutate(
+                        Object.freeze({
+                          contact: createContactQueryScope(vaultId, cId),
+                          request: Object.freeze({
+                            first_name: contact.first_name ?? "",
+                            last_name: contact.last_name,
+                            middle_name: contact.middle_name,
+                            nickname: contact.nickname,
+                            maiden_name: contact.maiden_name,
+                            prefix: contact.prefix,
+                            suffix: contact.suffix,
+                            gender_id: contact.gender_id,
+                            pronoun_id: contact.pronoun_id,
+                            template_id: contact.template_id,
+                            listed: true,
+                            needs_verification: false,
+                            first_met_through_contact_id:
+                              contact.first_met_through_contact_id,
+                            ...buildContactFirstMetRequest(
+                              contactFirstMetToCalendarDate(contact),
+                            ),
+                            last_talked_to: dateInputToTimestamp(
+                              timestampToDateInput(contact.last_talked_to),
+                            ),
+                            stay_in_touch_frequency_days:
+                              contact.stay_in_touch_frequency_days,
+                          } satisfies UpdateContactRequest),
+                        } satisfies UpdateContactMutationOperation),
+                      )
+                    }
                     loading={promoteRelationshipContactMutation.isPending}
                   >
                     {t("contact.needs_verification.promote_action")}
@@ -722,29 +1755,21 @@ export default function ContactDetail() {
             borderTop: `1px solid ${token.colorBorderSecondary}`,
           }}
         >
+          {currentVault?.current_user_permission === 100 && (
+            <Button
+              icon={<SettingOutlined />}
+              type="text"
+              size="small"
+              onClick={() => setIsLayoutDrawerOpen(true)}
+            >
+              {t("contact.layout.customize")}
+            </Button>
+          )}
           <Button
             icon={<EditOutlined />}
             type="text"
             size="small"
-            onClick={() => {
-              editForm.setFieldsValue({
-                prefix: contact.prefix,
-                first_name: contact.first_name,
-                middle_name: contact.middle_name,
-                last_name: contact.last_name,
-                suffix: contact.suffix,
-                nickname: contact.nickname,
-                maiden_name: contact.maiden_name,
-                gender_id: contact.gender_id,
-                pronoun_id: contact.pronoun_id,
-                first_met: contactFirstMetToCalendarDate(contact),
-                first_met_through_contact_id: contact.first_met_through_contact_id,
-                last_talked_to: timestampToDateInput(contact.last_talked_to),
-                stay_in_touch_frequency_days: contact.stay_in_touch_frequency_days,
-                needs_verification: contact.needs_verification,
-              });
-              setIsEditModalOpen(true);
-            }}
+            onClick={() => void openEditContactModal()}
           >
             {t("common.edit")}
           </Button>
@@ -754,7 +1779,9 @@ export default function ContactDetail() {
             size="small"
             onClick={() => toggleFavoriteMutation.mutate()}
           >
-            {contact.is_favorite ? t("contact.detail.unfavorite") : t("contact.detail.favorite")}
+            {contact.is_favorite
+              ? t("contact.detail.unfavorite")
+              : t("contact.detail.favorite")}
           </Button>
 
           <Dropdown
@@ -772,7 +1799,10 @@ export default function ContactDetail() {
                   icon: <DownloadOutlined />,
                   onClick: async () => {
                     try {
-                      const res = await api.vcard.contactsVcardList(String(vaultId), String(cId));
+                      const res = await api.vcard.contactsVcardList(
+                        String(vaultId),
+                        String(cId),
+                      );
                       const blob = new Blob([res as BlobPart]);
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement("a");
@@ -787,16 +1817,26 @@ export default function ContactDetail() {
                 },
                 {
                   key: "archive",
-                  label: contact.is_archived ? t("contact.detail.unarchive") : t("contact.detail.archive"),
+                  label: contact.is_archived
+                    ? t("contact.detail.unarchive")
+                    : t("contact.detail.archive"),
                   icon: <InboxOutlined />,
-                  onClick: () => toggleArchiveMutation.mutate(),
+                  onClick: () =>
+                    toggleArchiveMutation.mutate(
+                      Object.freeze({
+                        contact: createContactQueryScope(vaultId, cId),
+                      } satisfies ContactMutationOperation),
+                    ),
                 },
                 {
                   key: "template",
                   label: t("contact.detail.change_template"),
                   icon: <LayoutOutlined />,
                   onClick: () => {
-                    templateForm.setFieldValue("template_id", contact.template_id);
+                    templateForm.setFieldValue(
+                      "template_id",
+                      contact.template_id,
+                    );
                     setIsTemplateModalOpen(true);
                   },
                 },
@@ -815,7 +1855,13 @@ export default function ContactDetail() {
                       okText: t("contact.detail.delete_ok"),
                       okType: "danger",
                       cancelText: t("common.cancel"),
-                      onOk: () => deleteMutation.mutate(),
+                      onOk: () =>
+                        deleteMutation.mutate(
+                          Object.freeze({
+                            contact: createContactQueryScope(vaultId, cId),
+                            contactListUrl,
+                          } satisfies DeleteContactMutationOperation),
+                        ),
                     });
                   },
                 },
@@ -829,44 +1875,15 @@ export default function ContactDetail() {
       </Card>
 
       {stayInTouchPanel && (
-        <div style={{ marginBottom: 16 }}>
-          {stayInTouchPanel}
-        </div>
+        <div style={{ marginBottom: 16 }}>{stayInTouchPanel}</div>
       )}
 
-      <div style={{ marginBottom: 16 }}>
-        <ContactSummaryCard vaultId={vaultId} contactId={cId} contact={contact} readOnly={viewMode === "read"} />
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
-        <Segmented
-          options={[
-            { label: t("contact.detail.view_mode"), value: "read" },
-            { label: t("contact.detail.edit_mode"), value: "edit" },
-          ]}
-          value={viewMode}
-          onChange={(val) => setViewMode(val as "read" | "edit")}
-        />
-      </div>
-
-      {viewMode === "edit" ? (
-        <Tabs
-          items={tabItems}
-          defaultActiveKey={tabItems[0]?.key ?? "overview"}
-          style={{
-            marginTop: 4,
-          }}
-          tabBarStyle={{
-            marginBottom: 20,
-            paddingLeft: 4,
-          }}
-        />
-      ) : (
-        <Space direction="vertical" style={{ width: "100%" }} size={16}>
-          <QuickFactsModule {...moduleProps} readOnly={true} />
-          <NotesModule {...moduleProps} readOnly={true} />
-        </Space>
-      )}
+      <ContactSectionLayout
+        pages={sectionPages}
+        targetSectionKey={targetSectionKey}
+        targetContext={targetContext}
+        renderPage={renderModulesForPage}
+      />
 
       <Modal
         title={t("contact.detail.edit_title")}
@@ -878,7 +1895,17 @@ export default function ContactDetail() {
         <Form
           form={editForm}
           layout="vertical"
-          onFinish={(values: ContactEditFormValues) => updateContactMutation.mutate(buildUpdateContactRequest(values))}
+          onFinish={(values: ContactEditFormValues) =>
+            updateContactMutation.mutate(
+              Object.freeze({
+                contact: createContactQueryScope(vaultId, cId),
+                request: Object.freeze(
+                  buildUpdateContactRequest(values, contact.important_dates),
+                ),
+                labelIds: values.label_ids,
+              } satisfies UpdateContactMutationOperation),
+            )
+          }
         >
           <div style={{ display: "flex", gap: 16 }}>
             <Form.Item
@@ -893,15 +1920,19 @@ export default function ContactDetail() {
               label={t("contact.detail.first_name")}
               style={{ flex: 2 }}
               dependencies={["nickname"]}
-              rules={[{
-                validator: (_, value) => {
-                  const nickname = editForm.getFieldValue("nickname");
-                  if (!value?.trim() && !nickname?.trim()) {
-                    return Promise.reject(new Error(t("contact.form.name_or_nickname_required")));
-                  }
-                  return Promise.resolve();
+              rules={[
+                {
+                  validator: (_, value) => {
+                    const nickname = editForm.getFieldValue("nickname");
+                    if (!value?.trim() && !nickname?.trim()) {
+                      return Promise.reject(
+                        new Error(t("contact.form.name_or_nickname_required")),
+                      );
+                    }
+                    return Promise.resolve();
+                  },
                 },
-              }]}
+              ]}
             >
               <Input />
             </Form.Item>
@@ -935,15 +1966,19 @@ export default function ContactDetail() {
               label={t("contact.detail.nickname")}
               style={{ flex: 1 }}
               dependencies={["first_name"]}
-              rules={[{
-                validator: (_, value) => {
-                  const firstName = editForm.getFieldValue("first_name");
-                  if (!value?.trim() && !firstName?.trim()) {
-                    return Promise.reject(new Error(t("contact.form.name_or_nickname_required")));
-                  }
-                  return Promise.resolve();
+              rules={[
+                {
+                  validator: (_, value) => {
+                    const firstName = editForm.getFieldValue("first_name");
+                    if (!value?.trim() && !firstName?.trim()) {
+                      return Promise.reject(
+                        new Error(t("contact.form.name_or_nickname_required")),
+                      );
+                    }
+                    return Promise.resolve();
+                  },
                 },
-              }]}
+              ]}
             >
               <Input />
             </Form.Item>
@@ -955,17 +1990,56 @@ export default function ContactDetail() {
               <Input />
             </Form.Item>
           </div>
+          <ContactEditLabelsField vaultId={vaultId} />
           {/* Fix #62: gender and pronoun fields — fetched from personalize API */}
           <div style={{ display: "flex", gap: 16 }}>
-            <Form.Item name="gender_id" label={t("contact.detail.summary.gender")} style={{ flex: 1 }}>
-              <GenderPronounSelect entity="genders" vaultId={vaultId} placeholder={t("contact.form.select_gender")} />
+            <Form.Item
+              name="gender_id"
+              label={t("contact.detail.summary.gender")}
+              style={{ flex: 1 }}
+            >
+              <GenderPronounSelect
+                entity="genders"
+                vaultId={vaultId}
+                placeholder={t("contact.form.select_gender")}
+              />
             </Form.Item>
-            <Form.Item name="pronoun_id" label={t("contact.detail.summary.pronoun")} style={{ flex: 1 }}>
-              <GenderPronounSelect entity="pronouns" vaultId={vaultId} placeholder={t("contact.form.select_pronoun")} />
+            <Form.Item
+              name="pronoun_id"
+              label={t("contact.detail.summary.pronoun")}
+              style={{ flex: 1 }}
+            >
+              <GenderPronounSelect
+                entity="pronouns"
+                vaultId={vaultId}
+                placeholder={t("contact.form.select_pronoun")}
+              />
             </Form.Item>
           </div>
-          <Form.Item name="needs_verification" valuePropName="checked" style={{ marginBottom: 16 }}>
+          <Form.Item
+            name="needs_verification"
+            valuePropName="checked"
+            style={{ marginBottom: 16 }}
+          >
             <Checkbox>{t("contact.needs_verification.field_label")}</Checkbox>
+          </Form.Item>
+          <Form.Item<ContactEditFormValues>
+            name="important_dates"
+            style={{ marginBottom: 0 }}
+            rules={[
+              {
+                validator: (_, drafts) =>
+                  areImportantDateDraftsValid(drafts)
+                    ? Promise.resolve()
+                    : Promise.reject(
+                        new Error(
+                          t("modules.important_dates.invalid_profile_dates"),
+                        ),
+                      ),
+              },
+            ]}
+          >
+            <ContactImportantDatesEditor vaultId={vaultId} />
           </Form.Item>
           <div
             style={{
@@ -979,7 +2053,10 @@ export default function ContactDetail() {
             <Text strong style={{ display: "block", marginBottom: 4 }}>
               {t("contact.meeting.title")}
             </Text>
-            <Text type="secondary" style={{ display: "block", fontSize: 13, marginBottom: 12 }}>
+            <Text
+              type="secondary"
+              style={{ display: "block", fontSize: 13, marginBottom: 12 }}
+            >
               {t("contact.meeting.description")}
             </Text>
             <div style={{ display: "flex", gap: 16 }}>
@@ -989,7 +2066,12 @@ export default function ContactDetail() {
                 extra={t("contact.meeting.first_met_at_help")}
                 style={{ flex: 1 }}
               >
-                <CalendarDatePicker enableDatePrecision allowedDatePrecisions={["full", "month", "year"]} />
+                <CalendarDatePicker
+                  enableDatePrecision
+                  allowedDatePrecisions={["full", "month", "year"]}
+                  showToday
+                  maxDate={dayjs()}
+                />
               </Form.Item>
               <Form.Item
                 name="first_met_through_contact_id"
@@ -1001,7 +2083,9 @@ export default function ContactDetail() {
                   allowClear
                   showSearch
                   optionFilterProp="label"
-                  placeholder={t("contact.meeting.first_met_through_placeholder")}
+                  placeholder={t(
+                    "contact.meeting.first_met_through_placeholder",
+                  )}
                   options={metThroughContacts
                     .filter((option) => option.id && option.id !== cId)
                     .map((option) => ({
@@ -1024,7 +2108,10 @@ export default function ContactDetail() {
             <Text strong style={{ display: "block", marginBottom: 4 }}>
               {t("contact.catch_up.title")}
             </Text>
-            <Text type="secondary" style={{ display: "block", fontSize: 13, marginBottom: 12 }}>
+            <Text
+              type="secondary"
+              style={{ display: "block", fontSize: 13, marginBottom: 12 }}
+            >
               {t("contact.catch_up.description")}
             </Text>
             <div style={{ display: "flex", gap: 16 }}>
@@ -1071,7 +2158,7 @@ export default function ContactDetail() {
         <Form
           form={moveForm}
           layout="vertical"
-          onFinish={(values) => moveContactMutation.mutate(values.target_vault_id)}
+          onFinish={(values) => submitMoveContact(values.target_vault_id)}
         >
           <Form.Item
             name="target_vault_id"
@@ -1110,7 +2197,9 @@ export default function ContactDetail() {
         <Form
           form={templateForm}
           layout="vertical"
-          onFinish={(values) => updateTemplateMutation.mutate(values.template_id)}
+          onFinish={(values) =>
+            updateTemplateMutation.mutate(values.template_id)
+          }
         >
           <Form.Item
             name="template_id"
@@ -1119,7 +2208,10 @@ export default function ContactDetail() {
           >
             <Select
               loading={!templates.length}
-              options={templates.map((tpl) => ({ label: tpl.label, value: tpl.id }))}
+              options={templates.map((tpl) => ({
+                label: tpl.name,
+                value: tpl.id,
+              }))}
             />
           </Form.Item>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
@@ -1136,21 +2228,39 @@ export default function ContactDetail() {
           </div>
         </Form>
       </Modal>
+
+      <Drawer
+        title={t("contact.layout.customize")}
+        open={isLayoutDrawerOpen}
+        onClose={() => setIsLayoutDrawerOpen(false)}
+        width={detailScreens.md ? 720 : "100%"}
+        styles={{ body: { padding: 16 } }}
+      >
+        <ContactLayoutManager
+          vaultId={String(vaultId)}
+          initialTemplateId={tabsData?.template_id}
+        />
+      </Drawer>
+
+      <FloatButton.BackTop
+        aria-label={t("contact.detail.back_to_top")}
+        tooltip={t("contact.detail.back_to_top")}
+      />
     </div>
   );
 }
 
 // Helper component to load authenticated image blob
-function AvatarImageLoader({ 
-  url, 
-  updatedAt, 
-  initials, 
+function AvatarImageLoader({
+  url,
+  updatedAt,
+  initials,
   token,
   onUpload,
   onDelete,
-  isUploading
-}: { 
-  url: string; 
+  isUploading,
+}: {
+  url: string;
   updatedAt: string;
   initials: string;
   token: ReturnType<typeof theme.useToken>["token"];
@@ -1164,15 +2274,16 @@ function AvatarImageLoader({
 
   // Fetch avatar image with auth header
   useEffect(() => {
-    let revoke: string | null = null;
     let cancelled = false;
 
     httpClient.instance
-      .get(url, { responseType: "blob", params: { t: dayjs(updatedAt).unix() } })
+      .get(url, {
+        responseType: "blob",
+        params: { t: dayjs(updatedAt).unix() },
+      })
       .then((response) => {
         if (cancelled) return;
         const newUrl = URL.createObjectURL(response.data as Blob);
-        revoke = newUrl;
         setBlobUrl(newUrl);
         setHasAvatar(true);
       })
@@ -1184,9 +2295,15 @@ function AvatarImageLoader({
 
     return () => {
       cancelled = true;
-      if (revoke) URL.revokeObjectURL(revoke);
     };
   }, [url, updatedAt]);
+
+  useEffect(() => {
+    if (!blobUrl) return;
+
+    // The rendered URL owns cleanup so replacement commits before the old URL is revoked.
+    return () => URL.revokeObjectURL(blobUrl);
+  }, [blobUrl]);
 
   return (
     <div
@@ -1210,7 +2327,13 @@ function AvatarImageLoader({
           style={{ width: "100%", height: "100%", objectFit: "cover" }}
         />
       ) : (
-        <span style={{ fontSize: 30, color: token.colorTextLightSolid, fontWeight: 500 }}>
+        <span
+          style={{
+            fontSize: 30,
+            color: token.colorTextLightSolid,
+            fontWeight: 500,
+          }}
+        >
           {initials}
         </span>
       )}
@@ -1235,40 +2358,53 @@ function AvatarImageLoader({
           e.currentTarget.style.opacity = "0";
         }}
       >
-         <Space>
-            <Upload
-              showUploadList={false}
-              beforeUpload={(file) => {
-                onUpload(file);
-                return false;
-              }}
+        <Space>
+          <Upload
+            showUploadList={false}
+            beforeUpload={(file) => {
+              onUpload(file);
+              return false;
+            }}
+          >
+            <Button
+              type="text"
+              icon={
+                <CameraOutlined
+                  style={{ color: token.colorTextLightSolid, fontSize: 20 }}
+                />
+              }
+              style={{ color: token.colorTextLightSolid }}
+            />
+          </Upload>
+          {hasAvatar && (
+            <Popconfirm
+              title={t("contact.detail.delete_confirm")}
+              onConfirm={onDelete}
             >
               <Button
                 type="text"
-                icon={<CameraOutlined style={{ color: token.colorTextLightSolid, fontSize: 20 }} />}
-                style={{ color: token.colorTextLightSolid }}
+                icon={
+                  <DeleteOutlined
+                    style={{ color: token.colorTextLightSolid, fontSize: 16 }}
+                  />
+                }
+                danger
               />
-            </Upload>
-            {hasAvatar && (
-              <Popconfirm
-                title={t("contact.detail.delete_confirm")}
-                onConfirm={onDelete}
-              >
-                 <Button
-                  type="text"
-                  icon={<DeleteOutlined style={{ color: token.colorTextLightSolid, fontSize: 16 }} />}
-                  danger
-                />
-              </Popconfirm>
-            )}
-          </Space>
+            </Popconfirm>
+          )}
+        </Space>
       </div>
     </div>
   );
 }
 
 // Shared Select component for gender/pronoun fetched from personalize API
-function GenderPronounSelect({ entity, vaultId, placeholder, ...props }: {
+function GenderPronounSelect({
+  entity,
+  vaultId,
+  placeholder,
+  ...props
+}: {
   entity: string;
   vaultId: string;
   placeholder: string;
@@ -1278,7 +2414,7 @@ function GenderPronounSelect({ entity, vaultId, placeholder, ...props }: {
   const { data: items = [], isLoading } = useQuery<PersonalizeItem[]>({
     queryKey: ["vaults", vaultId, "personalize", entity],
     queryFn: async () => {
-      const res = await api.personalize.personalizeDetail(entity);
+      const res = await api.personalize.personalizeDetail2(String(vaultId), entity);
       return res.data ?? [];
     },
   });

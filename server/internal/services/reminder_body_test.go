@@ -6,9 +6,33 @@ import (
 	"time"
 
 	"github.com/naiba/bonds/internal/dto"
+	"github.com/naiba/bonds/internal/i18n"
 	"github.com/naiba/bonds/internal/models"
 	"github.com/naiba/bonds/internal/testutil"
 )
+
+func TestReminderDeliveryContentTemplatesAreCompleteAndNotDuplicated(t *testing.T) {
+	reminder := &models.ContactReminder{Label: "Birthday", CalendarType: "gregorian"}
+	scheduledAt := time.Date(2026, time.September, 5, 9, 0, 0, 0, time.UTC)
+	for _, locale := range i18n.Supported {
+		t.Run(locale, func(t *testing.T) {
+			subject, body := reminderDeliveryContent(reminder, scheduledAt, locale, false, "John Doe")
+			if !strings.Contains(subject, "Birthday") || !strings.Contains(subject, "John Doe") {
+				t.Fatalf("subject does not identify reminder and contact: %q", subject)
+			}
+			if strings.Contains(subject, "{{") || strings.Contains(body, "{{") {
+				t.Fatalf("unresolved reminder placeholder: subject=%q body=%q", subject, body)
+			}
+			if strings.Contains(body, "<h") || strings.Count(body, "Birthday") != 1 {
+				t.Fatalf("reminder body repeats its heading or label: %q", body)
+			}
+			plainBody := stripHTML(body)
+			if !strings.Contains(plainBody, "John Doe") || !strings.Contains(plainBody, "2026-09-05") {
+				t.Fatalf("reminder body is missing delivery context: %q", plainBody)
+			}
+		})
+	}
+}
 
 // TestReminderBodyIncludesDateAndAlternativeCalendar verifies that the
 // reminder email/push body shows the fire date — previously the template
@@ -37,6 +61,13 @@ func TestReminderBodyIncludesDateAndAlternativeCalendar(t *testing.T) {
 	vault := models.Vault{Name: "Vault", AccountID: resp.User.AccountID}
 	if err := db.Create(&vault).Error; err != nil {
 		t.Fatalf("vault: %v", err)
+	}
+	if err := db.Create(&models.UserVault{
+		VaultID:    vault.ID,
+		UserID:     resp.User.ID,
+		Permission: models.PermissionManager,
+	}).Error; err != nil {
+		t.Fatalf("vault membership: %v", err)
 	}
 	first, last := "Lunar", "Anchored"
 	contact := models.Contact{VaultID: vault.ID, FirstName: &first, LastName: &last}
@@ -112,6 +143,13 @@ func TestReminderBodyGregorianShowsPlainDate(t *testing.T) {
 	vault := models.Vault{Name: "Vault", AccountID: resp.User.AccountID}
 	if err := db.Create(&vault).Error; err != nil {
 		t.Fatalf("vault: %v", err)
+	}
+	if err := db.Create(&models.UserVault{
+		VaultID:    vault.ID,
+		UserID:     resp.User.ID,
+		Permission: models.PermissionManager,
+	}).Error; err != nil {
+		t.Fatalf("vault membership: %v", err)
 	}
 	first, last := "Greg", "Smith"
 	contact := models.Contact{VaultID: vault.ID, FirstName: &first, LastName: &last}

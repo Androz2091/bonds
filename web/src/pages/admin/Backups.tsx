@@ -13,7 +13,6 @@ import {
 } from "antd";
 import {
   PlusOutlined,
-  DownloadOutlined,
   DeleteOutlined,
   UndoOutlined,
   DatabaseOutlined,
@@ -101,12 +100,6 @@ export default function AdminBackups() {
     onError: () => message.error(t("backups.restore_failed")),
   });
 
-  function handleDownload(filename: string) {
-    const token = localStorage.getItem("token");
-    const url = `/api/admin/backups/${filename}/download?token=${token}`;
-    window.open(url, "_blank");
-  }
-
   function handleRestore(filename: string) {
     modal.confirm({
       title: t("backups.restore"),
@@ -150,14 +143,6 @@ export default function AdminBackups() {
       width: 200,
       render: (_: unknown, record: BackupItem) => (
         <Space>
-          <Button
-            type="text"
-            size="small"
-            icon={<DownloadOutlined />}
-            onClick={() => handleDownload(record.filename)}
-          >
-            {t("backups.download")}
-          </Button>
           <Button
             type="text"
             size="small"

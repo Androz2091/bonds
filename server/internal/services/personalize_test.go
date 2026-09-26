@@ -1,12 +1,20 @@
 package services
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/models"
 	"github.com/naiba/bonds/internal/testutil"
 )
+
+func TestSyncAllTranslationsRejectsUnsupportedLocale(t *testing.T) {
+	svc, accountID := setupPersonalizeTest(t)
+	if err := svc.SyncAllTranslations(accountID, "ja"); !errors.Is(err, ErrUnsupportedLocale) {
+		t.Fatalf("SyncAllTranslations unsupported locale error = %v, want ErrUnsupportedLocale", err)
+	}
+}
 
 func setupPersonalizeTest(t *testing.T) (*PersonalizeService, string) {
 	t.Helper()
@@ -196,33 +204,16 @@ func TestUpdatePositionTaskStatusesKeepsCustomMetadata(t *testing.T) {
 	}
 }
 
-func TestListTemplatesReturnsLabel(t *testing.T) {
+func TestLegacyAccountContactLayoutsAreNotPersonalizeEntities(t *testing.T) {
 	svc, accountID := setupPersonalizeTest(t)
-
-	created, err := svc.Create(accountID, "templates", dto.PersonalizeEntityRequest{Label: "My Template"})
-	if err != nil {
-		t.Fatalf("create template failed: %v", err)
+	if _, err := svc.List(accountID, "templates"); err != ErrUnknownEntityType {
+		t.Fatalf("legacy templates list returned %v", err)
 	}
-	if created.Label != "My Template" {
-		t.Fatalf("created template label = %q, want %q", created.Label, "My Template")
+	if _, err := svc.Create(accountID, "templates", dto.PersonalizeEntityRequest{Label: "My Template"}); err != ErrUnknownEntityType {
+		t.Fatalf("legacy template creation returned %v", err)
 	}
-
-	templates, err := svc.List(accountID, "templates")
-	if err != nil {
-		t.Fatalf("List templates failed: %v", err)
-	}
-
-	found := false
-	for _, tpl := range templates {
-		if tpl.ID == created.ID {
-			found = true
-			if tpl.Label != "My Template" {
-				t.Errorf("listed template label = %q, want %q", tpl.Label, "My Template")
-			}
-		}
-	}
-	if !found {
-		t.Fatalf("created template id %d not found in list", created.ID)
+	if _, err := svc.List(accountID, "modules"); err != ErrUnknownEntityType {
+		t.Fatalf("legacy modules list returned %v", err)
 	}
 }
 
@@ -454,6 +445,20 @@ func TestSyncAllTranslations_VaultEntities(t *testing.T) {
 			labels[i] = m.Label
 		}
 		t.Fatalf("expected Chinese '🥳 棒极了' mood after sync, got: %v", labels)
+	}
+
+	var phoneCall models.ActivityType
+	if err := db.Preload("ActivityCategory").
+		Joins("JOIN activity_categories ON activity_categories.id = activity_types.activity_category_id").
+		Where("activity_categories.vault_id = ? AND activity_types.system_kind = ?", vault.ID, "phone_call").
+		First(&phoneCall).Error; err != nil {
+		t.Fatalf("query phone-call activity type after sync: %v", err)
+	}
+	if phoneCall.Label == nil || *phoneCall.Label != "电话通话" {
+		t.Fatalf("phone-call label after Chinese sync = %v, want 电话通话", phoneCall.Label)
+	}
+	if phoneCall.ActivityCategory.Label == nil || *phoneCall.ActivityCategory.Label != "互动" {
+		t.Fatalf("interaction category after Chinese sync = %v, want 互动", phoneCall.ActivityCategory.Label)
 	}
 }
 

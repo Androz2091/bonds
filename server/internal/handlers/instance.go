@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/services"
 	"github.com/naiba/bonds/pkg/response"
@@ -14,6 +14,7 @@ type InstanceHandler struct {
 	oauthService    *services.OAuthService
 	webauthnService *services.WebAuthnService
 	version         string
+	versionChecker  services.VersionChecker
 }
 
 func NewInstanceHandler(
@@ -27,6 +28,7 @@ func NewInstanceHandler(
 		oauthService:    oauthService,
 		webauthnService: webauthnService,
 		version:         version,
+		versionChecker:  services.NewGitHubVersionChecker(),
 	}
 }
 
@@ -38,7 +40,7 @@ func NewInstanceHandler(
 //	@Produce		json
 //	@Success		200	{object}	response.APIResponse{data=dto.InstanceInfoResponse}
 //	@Router			/instance/info [get]
-func (h *InstanceHandler) GetInfo(c echo.Context) error {
+func (h *InstanceHandler) GetInfo(c *echo.Context) error {
 	registrationEnabled := h.settingService.GetBool("registration.enabled", true)
 	passwordAuthEnabled := h.settingService.GetBool("auth.password.enabled", true)
 	requireEmailVerification := h.settingService.GetBool("auth.require_email_verification", false)
@@ -48,12 +50,15 @@ func (h *InstanceHandler) GetInfo(c echo.Context) error {
 
 	providers := h.oauthService.ListAvailableProviders()
 	oauthNames := make([]string, len(providers))
+	oauthDetails := make([]dto.OAuthProviderInfo, len(providers))
 	for i, p := range providers {
-		if dn, ok := p["display_name"]; ok && dn != "" {
-			oauthNames[i] = dn
-		} else {
-			oauthNames[i] = p["name"]
+		name := p["name"]
+		displayName := p["display_name"]
+		if displayName == "" {
+			displayName = name
 		}
+		oauthNames[i] = name
+		oauthDetails[i] = dto.OAuthProviderInfo{Name: name, DisplayName: displayName}
 	}
 
 	webauthnEnabled := h.webauthnService.IsEnabled()
@@ -63,9 +68,15 @@ func (h *InstanceHandler) GetInfo(c echo.Context) error {
 		RegistrationEnabled:      registrationEnabled,
 		PasswordAuthEnabled:      passwordAuthEnabled,
 		OAuthProviders:           oauthNames,
+		OAuthProviderDetails:     oauthDetails,
 		WebAuthnEnabled:          webauthnEnabled,
 		AppName:                  appName,
 		RequireEmailVerification: emailVerificationActive,
+	}
+	if update := h.versionChecker.Check(h.version); update != nil {
+		info.UpdateAvailable = true
+		info.LatestVersion = update.Version
+		info.LatestVersionURL = update.URL
 	}
 
 	return response.OK(c, info)

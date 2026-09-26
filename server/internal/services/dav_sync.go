@@ -2,6 +2,9 @@ package services
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -16,6 +19,7 @@ import (
 	"github.com/naiba/bonds/internal/models"
 	"github.com/naiba/bonds/pkg/response"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -36,18 +40,38 @@ type CardDAVClient interface {
 	RemoveAll(ctx context.Context, path string) error
 }
 
+type DavTLSConfig struct {
+	CustomCAPEM   string
+	SkipTLSVerify bool
+}
+
 type CardDAVClientFactory interface {
-	NewClient(uri, username, password string) (CardDAVClient, error)
+	NewClient(uri, username, password string, tlsConfig DavTLSConfig) (CardDAVClient, error)
 }
 
 type DefaultCardDAVClientFactory struct{}
 
-func (f *DefaultCardDAVClientFactory) NewClient(uri, username, password string) (CardDAVClient, error) {
+func (f *DefaultCardDAVClientFactory) NewClient(uri, username, password string, tlsConfig DavTLSConfig) (CardDAVClient, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: tlsConfig.SkipTLSVerify} //nolint:gosec -- explicit per-subscription opt-in
+	if tlsConfig.CustomCAPEM != "" {
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			roots = x509.NewCertPool()
+		}
+		if ok := roots.AppendCertsFromPEM([]byte(tlsConfig.CustomCAPEM)); !ok {
+			return nil, fmt.Errorf("invalid custom CA certificate")
+		}
+		transport.TLSClientConfig.RootCAs = roots
+	}
 	httpClient := &http.Client{
 		Timeout: 30 * time.Second,
-		Transport: &fallbackAuthTransport{
-			username: username,
-			password: password,
+		Transport: &davETagCompatibilityTransport{
+			base: &fallbackAuthTransport{
+				username: username,
+				password: password,
+				base:     transport,
+			},
 		},
 	}
 	return carddav.NewClient(httpClient, uri)
@@ -59,6 +83,7 @@ type fallbackAuthTransport struct {
 	useDigest  bool
 	digestOnce sync.Once
 	digestT    *digest.Transport
+	base       http.RoundTripper
 }
 
 func (t *fallbackAuthTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -67,7 +92,7 @@ func (t *fallbackAuthTransport) RoundTrip(req *http.Request) (*http.Response, er
 	}
 
 	req.SetBasicAuth(t.username, t.password)
-	resp, err := http.DefaultTransport.RoundTrip(req)
+	resp, err := t.baseTransport().RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
@@ -88,11 +113,19 @@ func (t *fallbackAuthTransport) RoundTrip(req *http.Request) (*http.Response, er
 func (t *fallbackAuthTransport) getDigestTransport() *digest.Transport {
 	t.digestOnce.Do(func() {
 		t.digestT = &digest.Transport{
-			Username: t.username,
-			Password: t.password,
+			Username:  t.username,
+			Password:  t.password,
+			Transport: t.baseTransport(),
 		}
 	})
 	return t.digestT
+}
+
+func (t *fallbackAuthTransport) baseTransport() http.RoundTripper {
+	if t.base != nil {
+		return t.base
+	}
+	return http.DefaultTransport
 }
 
 type DavSyncService struct {
@@ -116,7 +149,7 @@ func (s *DavSyncService) SetClientFactory(factory CardDAVClientFactory) {
 }
 
 func (s *DavSyncService) TestConnection(req dto.TestDavConnectionRequest) (*dto.TestDavConnectionResponse, error) {
-	client, err := s.clientFactory.NewClient(req.URI, req.Username, req.Password)
+	client, err := s.clientFactory.NewClient(req.URI, req.Username, req.Password, DavTLSConfig{CustomCAPEM: req.CustomCAPEM, SkipTLSVerify: req.SkipTLSVerify})
 	if err != nil {
 		return &dto.TestDavConnectionResponse{
 			Success: false,
@@ -195,7 +228,7 @@ func (s *DavSyncService) SyncSubscription(ctx context.Context, subID, vaultID st
 		return nil, err
 	}
 
-	client, err := s.clientFactory.NewClient(sub.URI, sub.Username, password)
+	client, err := s.clientFactory.NewClient(sub.URI, sub.Username, password, DavTLSConfig{CustomCAPEM: sub.CustomCAPEM, SkipTLSVerify: sub.SkipTLSVerify})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create CardDAV client: %w", err)
 	}
@@ -205,7 +238,7 @@ func (s *DavSyncService) SyncSubscription(ctx context.Context, subID, vaultID st
 		return nil, fmt.Errorf("vault not found: %w", err)
 	}
 	accountID := vault.AccountID
-	userID := sub.UserID
+	userID := sub.CreatedByUserID
 
 	result := &dto.TriggerSyncResponse{}
 	// Discover address book path if not cached
@@ -381,11 +414,63 @@ func (s *DavSyncService) upsertFromObject(
 	var action string
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var state models.ContactSubscriptionState
+		stateErr := tx.Where("address_book_subscription_id = ? AND distant_uri = ?", subID, obj.Path).First(&state).Error
+		if stateErr != nil && !errors.Is(stateErr, gorm.ErrRecordNotFound) {
+			return stateErr
+		}
+		if stateErr == nil && state.DistantEtag != "" && state.DistantEtag == obj.ETag {
+			var mappedContact models.Contact
+			findErr := tx.Select("id").Where("id = ? AND vault_id = ?", state.ContactID, vaultID).First(&mappedContact).Error
+			if findErr == nil {
+				contactID = state.ContactID
+				action = "skipped"
+				return nil
+			}
+			if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+				return findErr
+			}
+			if err := tx.Delete(&state).Error; err != nil {
+				return err
+			}
+			state = models.ContactSubscriptionState{}
+			stateErr = gorm.ErrRecordNotFound
+		}
+
+		existingContactID := ""
+		if stateErr == nil {
+			existingContactID = state.ContactID
+		}
+
 		var upsertErr error
 		contactID, action, upsertErr = s.vcardService.UpsertContactFromVCard(
-			tx, obj.Card, vaultID, userID, accountID, obj.Path, obj.ETag, lastSyncAt,
+			tx, obj.Card, vaultID, userID, accountID, existingContactID, obj.Path, obj.ETag, lastSyncAt,
 		)
-		return upsertErr
+		if upsertErr != nil {
+			return upsertErr
+		}
+		if stateErr == nil && state.ContactID != contactID {
+			if err := tx.Delete(&state).Error; err != nil {
+				return err
+			}
+			state = models.ContactSubscriptionState{}
+			stateErr = gorm.ErrRecordNotFound
+		}
+
+		stateEtag := obj.ETag
+		if action == "conflict_local_wins" {
+			if stateErr == nil {
+				stateEtag = state.DistantEtag
+			} else {
+				var contact models.Contact
+				if err := tx.Select("distant_etag").First(&contact, "id = ?", contactID).Error; err != nil {
+					return err
+				}
+				stateEtag = ptrToStr(contact.DistantEtag)
+			}
+		}
+
+		return upsertContactSubscriptionState(tx, contactID, subID, obj.Path, stateEtag)
 	})
 	if err != nil {
 		errMsg := fmt.Sprintf("upsert failed: %v", err)
@@ -408,6 +493,19 @@ func (s *DavSyncService) upsertFromObject(
 		result.Skipped++
 		s.logSyncAction(subID, nil, obj.Path, obj.ETag, "skipped", "")
 	}
+}
+
+func upsertContactSubscriptionState(db *gorm.DB, contactID, subID, distantURI, distantEtag string) error {
+	state := models.ContactSubscriptionState{
+		ContactID:                 contactID,
+		AddressBookSubscriptionID: subID,
+		DistantURI:                distantURI,
+		DistantEtag:               distantEtag,
+	}
+	return db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "contact_id"}, {Name: "address_book_subscription_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"distant_uri", "distant_etag", "updated_at"}),
+	}).Create(&state).Error
 }
 
 func (s *DavSyncService) processDeletedPaths(

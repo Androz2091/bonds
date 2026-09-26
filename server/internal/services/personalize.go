@@ -13,6 +13,7 @@ import (
 var ErrPersonalizeEntityNotFound = errors.New("entity not found")
 var ErrUnknownEntityType = errors.New("unknown entity type")
 var ErrPersonalizeEntityNotSortable = errors.New("entity is not sortable")
+var ErrCurrenciesNotEditable = errors.New("currencies are curated via the dedicated toggle APIs")
 
 type PersonalizeService struct {
 	db *gorm.DB
@@ -43,8 +44,6 @@ var entityConfigs = map[string]entityConfig{
 	"group-types":        {table: "group_types", hasLabel: true, hasPosition: true},
 	"post-templates":     {table: "post_templates", hasLabel: true, hasPosition: true},
 	"relationship-types": {table: "relationship_group_types", hasName: true},
-	"templates":          {table: "templates", hasName: true},
-	"modules":            {table: "modules", hasName: true},
 	"currencies":         {table: "currencies"},
 	"emotions":           {table: "emotions"},
 }
@@ -105,6 +104,10 @@ func (s *PersonalizeService) Create(accountID, entity string, req dto.Personaliz
 		return s.createTaskStatus(accountID, req)
 	}
 
+	if entity == "currencies" {
+		return nil, ErrCurrenciesNotEditable
+	}
+
 	labelCol := s.getLabelCol(cfg)
 	nameCol := s.getNameCol(cfg)
 	val := req.Label
@@ -161,9 +164,20 @@ func (s *PersonalizeService) Update(accountID, entity string, id uint, req dto.P
 		val = req.Name
 	}
 
+	if entity == "currencies" {
+		return nil, ErrCurrenciesNotEditable
+	}
+
+	assignments := labelCol + " = ?"
+	args := []interface{}{val}
+	if labelCol != nameCol {
+		assignments += ", " + nameCol + " = ?"
+		args = append(args, val)
+	}
+	args = append(args, time.Now(), id, accountID)
 	result := s.db.Exec(
-		fmt.Sprintf("UPDATE %s SET %s = ?, %s = ?, updated_at = ? WHERE id = ? AND account_id = ?", cfg.table, labelCol, nameCol),
-		val, val, time.Now(), id, accountID,
+		fmt.Sprintf("UPDATE %s SET %s, updated_at = ? WHERE id = ? AND account_id = ?", cfg.table, assignments),
+		args...,
 	)
 	if result.Error != nil {
 		return nil, result.Error
@@ -185,6 +199,10 @@ func (s *PersonalizeService) Delete(accountID, entity string, id uint) error {
 
 	if entity == "task-statuses" {
 		return s.deleteTaskStatus(accountID, id)
+	}
+
+	if entity == "currencies" {
+		return ErrCurrenciesNotEditable
 	}
 
 	result := s.db.Exec(
@@ -249,16 +267,13 @@ var accountSyncEntities = []syncableEntity{
 	{table: "gift_occasions", displayCol: "label", keyCol: "label_translation_key", ownerCol: "account_id"},
 	{table: "gift_states", displayCol: "label", keyCol: "label_translation_key", ownerCol: "account_id"},
 	{table: "post_templates", displayCol: "label", keyCol: "label_translation_key", ownerCol: "account_id"},
-	{table: "templates", displayCol: "name", keyCol: "name_translation_key", ownerCol: "account_id"},
-	{table: "template_pages", displayCol: "name", keyCol: "name_translation_key", ownerCol: "account_id", parentTable: "templates", parentJoinCol: "template_id"},
-	{table: "modules", displayCol: "name", keyCol: "name_translation_key", ownerCol: "account_id"},
 	{table: "task_statuses", displayCol: "name", keyCol: "name_translation_key", ownerCol: "account_id"},
 }
 
 var vaultSyncEntities = []syncableEntity{
 	{table: "mood_tracking_parameters", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id"},
-	{table: "life_event_categories", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id"},
-	{table: "life_event_types", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id", parentTable: "life_event_categories", parentJoinCol: "life_event_category_id"},
+	{table: "activity_categories", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id"},
+	{table: "activity_types", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id", parentTable: "activity_categories", parentJoinCol: "activity_category_id"},
 	{table: "vault_quick_facts_templates", displayCol: "label", keyCol: "label_translation_key", ownerCol: "vault_id"},
 	// contact_important_date_types was historically absent from this list, which
 	// is why switching locales and clicking "Sync translations" left birthday /
@@ -269,6 +284,9 @@ var vaultSyncEntities = []syncableEntity{
 }
 
 func (s *PersonalizeService) SyncAllTranslations(accountID, locale string) error {
+	if !i18n.IsSupported(locale) {
+		return ErrUnsupportedLocale
+	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		if err := syncEntities(tx, accountSyncEntities, accountID, locale); err != nil {
 			return err

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,38 +170,17 @@ func TestMoveContactCrossAccountTargetForbidden(t *testing.T) {
 	assertMoveContactNotInVault(t, svc, contactID, targetVaultID)
 }
 
-func TestMoveContactShadowSelfContactNotFound(t *testing.T) {
-	svc, _, vault1ID, vault2ID, userID := setupContactMoveTest(t)
-	sourceUserVault := getMoveTestUserVault(t, svc, userID, vault1ID)
-	targetUserVault := getMoveTestUserVault(t, svc, userID, vault2ID)
-	shadowContactID := sourceUserVault.ContactID
-	if shadowContactID == "" {
-		t.Fatal("expected source user vault to have a shadow contact")
-	}
-	if shadowContactID == targetUserVault.ContactID {
-		t.Fatal("expected each vault to have a distinct shadow contact")
+func TestMoveProtectedContactNotFound(t *testing.T) {
+	svc, contactID, vault1ID, vault2ID, userID := setupContactMoveTest(t)
+	if err := svc.db.Model(&models.Contact{}).Where("id = ?", contactID).Update("can_be_deleted", false).Error; err != nil {
+		t.Fatalf("protect contact: %v", err)
 	}
 
-	_, err := svc.Move(shadowContactID, vault1ID, vault2ID, userID)
+	_, err := svc.Move(contactID, vault1ID, vault2ID, userID)
 	if !errors.Is(err, ErrContactNotFound) {
 		t.Fatalf("expected ErrContactNotFound, got %v", err)
 	}
-	assertMoveContactRemainsInVault(t, svc, shadowContactID, vault1ID)
-	shadowContact := getMoveTestContact(t, svc, shadowContactID)
-	if shadowContact.CanBeDeleted || shadowContact.Listed {
-		t.Fatalf("expected shadow contact to remain hidden and undeletable, got can_be_deleted=%v listed=%v", shadowContact.CanBeDeleted, shadowContact.Listed)
-	}
-	reloadedSourceUserVault := getMoveTestUserVault(t, svc, userID, vault1ID)
-	reloadedTargetUserVault := getMoveTestUserVault(t, svc, userID, vault2ID)
-	if reloadedSourceUserVault.ContactID != shadowContactID {
-		t.Fatalf("expected source UserVault.ContactID to remain %s, got %s", shadowContactID, reloadedSourceUserVault.ContactID)
-	}
-	if reloadedTargetUserVault.ContactID != targetUserVault.ContactID {
-		t.Fatalf("expected target UserVault.ContactID to remain %s, got %s", targetUserVault.ContactID, reloadedTargetUserVault.ContactID)
-	}
-	if reloadedTargetUserVault.ContactID == shadowContactID {
-		t.Fatal("expected target UserVault.ContactID not to point at source shadow contact")
-	}
+	assertMoveContactRemainsInVault(t, svc, contactID, vault1ID)
 }
 
 func TestMoveContactNotFound(t *testing.T) {
@@ -418,27 +398,94 @@ func TestMoveManyMovesFullTasksLoansAndStripsMixedPivots(t *testing.T) {
 	assertMoveCount(t, svc, &models.ContactLoan{}, "loan_id = ?", 0, mixedLoan.ID)
 }
 
-func TestMoveManyCleansLifeEventPivotsAndOrphanTimeline(t *testing.T) {
+func TestMoveManyCleansActivityPivotsAndOrphanEvent(t *testing.T) {
 	svc, contactID, vault1ID, vault2ID, userID := setupContactMoveTest(t)
-	lifeSvc := NewLifeEventService(svc.db)
-	typeID := getLifeEventTypeIDForMoveVault(t, svc, vault1ID)
-	created, err := lifeSvc.CreateDashboardLifeEvent(vault1ID, dto.CreateLifeEventRequest{
-		LifeEventTypeID: typeID,
-		HappenedAt:      time.Now(),
-		Summary:         "Move cleanup",
-		Participants:    []string{contactID},
+	lifeSvc := NewActivityService(svc.db)
+	typeID := getActivityTypeIDForMoveVault(t, svc, vault1ID)
+	started := time.Now()
+	created, err := lifeSvc.Create(vault1ID, dto.ActivityUpsertRequest{
+		ActivityTypeID: typeID, PrimaryContactID: contactID,
+		StartDate: &started, Title: "Move cleanup",
 	})
 	if err != nil {
-		t.Fatalf("CreateDashboardLifeEvent failed: %v", err)
+		t.Fatalf("Create activity failed: %v", err)
 	}
 
 	if _, err := svc.MoveMany([]string{contactID}, vault1ID, vault2ID, userID); err != nil {
 		t.Fatalf("MoveMany failed: %v", err)
 	}
-	assertMoveCount(t, svc, &models.LifeEventParticipant{}, "contact_id = ?", 0, contactID)
-	assertMoveCount(t, svc, &models.TimelineEventParticipant{}, "contact_id = ?", 0, contactID)
-	assertMoveCount(t, svc, &models.LifeEvent{}, "id = ?", 0, created.LifeEvents[0].ID)
-	assertMoveCount(t, svc, &models.TimelineEvent{}, "id = ?", 0, created.ID)
+	assertMoveCount(t, svc, &models.ActivityParticipant{}, "contact_id = ?", 0, contactID)
+	assertMoveCount(t, svc, &models.Activity{}, "id = ?", 0, created.ID)
+}
+
+func TestMoveManyPreservesUserSubjectActivityAfterLastContactParticipantMoves(t *testing.T) {
+	svc, contactID, vault1ID, vault2ID, userID := setupContactMoveTest(t)
+	activitySvc := NewActivityService(svc.db)
+	typeID := getActivityTypeIDForMoveVault(t, svc, vault1ID)
+	started := time.Now()
+	participantIDs := []string{contactID}
+	created, err := activitySvc.CreateForUser(vault1ID, userID, dto.ActivityUpsertRequest{
+		ActivityTypeID: typeID,
+		ParticipantIDs: &participantIDs,
+		StartDate:      &started,
+		Title:          "User subject with contact participant",
+	})
+	if err != nil {
+		t.Fatalf("Create user-subject activity failed: %v", err)
+	}
+
+	if _, err := svc.MoveMany([]string{contactID}, vault1ID, vault2ID, userID); err != nil {
+		t.Fatalf("MoveMany failed: %v", err)
+	}
+
+	assertMoveCount(t, svc, &models.ActivityParticipant{}, "activity_id = ?", 0, created.ID)
+	assertMoveCount(t, svc, &models.Activity{}, "id = ? AND vault_id = ? AND subject_user_id = ?", 1, created.ID, vault1ID, userID)
+}
+
+func TestMoveManyKeepsMilestoneAttachedWhenAffectedParentSurvives(t *testing.T) {
+	svc, contactID, vault1ID, vault2ID, userID := setupContactMoveTest(t)
+	contactSvc := NewContactService(svc.db)
+	remaining, err := contactSvc.CreateContact(vault1ID, userID, dto.CreateContactRequest{FirstName: "Remaining"})
+	if err != nil {
+		t.Fatalf("Create remaining participant failed: %v", err)
+	}
+	activitySvc := NewActivityService(svc.db)
+	typeID := getActivityTypeIDForMoveVault(t, svc, vault1ID)
+	started := time.Now()
+	participantIDs := []string{remaining.ID}
+	parent, err := activitySvc.Create(vault1ID, dto.ActivityUpsertRequest{
+		ActivityTypeID:   typeID,
+		PrimaryContactID: contactID,
+		ParticipantIDs:   &participantIDs,
+		StartDate:        &started,
+		Title:            "Parent with remaining participant",
+	})
+	if err != nil {
+		t.Fatalf("Create parent activity failed: %v", err)
+	}
+	milestone, err := activitySvc.Create(vault1ID, dto.ActivityUpsertRequest{
+		ActivityTypeID:   typeID,
+		PrimaryContactID: remaining.ID,
+		ParentID:         &parent.ID,
+		StartDate:        &started,
+		Title:            "Milestone",
+	})
+	if err != nil {
+		t.Fatalf("Create milestone failed: %v", err)
+	}
+
+	if _, err := svc.MoveMany([]string{contactID}, vault1ID, vault2ID, userID); err != nil {
+		t.Fatalf("MoveMany failed: %v", err)
+	}
+
+	assertMoveCount(t, svc, &models.Activity{}, "id = ?", 1, parent.ID)
+	var reloadedMilestone models.Activity
+	if err := svc.db.First(&reloadedMilestone, milestone.ID).Error; err != nil {
+		t.Fatalf("Reload milestone failed: %v", err)
+	}
+	if reloadedMilestone.ParentID == nil || *reloadedMilestone.ParentID != parent.ID {
+		t.Fatalf("expected milestone parent_id %d to be preserved, got %v", parent.ID, reloadedMilestone.ParentID)
+	}
 }
 
 func TestMoveManyAllowsArchivedContacts(t *testing.T) {
@@ -473,7 +520,7 @@ func TestMoveManySameVaultDoesNotCleanRelationships(t *testing.T) {
 	company := models.Company{VaultID: vaultID, Name: "Keep Company"}
 	journal := models.Journal{VaultID: vaultID, Name: "Keep Journal"}
 	lifeMetric := models.LifeMetric{VaultID: vaultID, Label: "Keep Metric"}
-	subscription := models.AddressBookSubscription{VaultID: vaultID, UserID: userID, URI: "https://dav.example.com/source/", Username: "user", Password: "encrypted", Active: true, SyncWay: SyncWayPush, Capabilities: "{}"}
+	subscription := models.AddressBookSubscription{VaultID: vaultID, CreatedByUserID: userID, URI: "https://dav.example.com/source/", Username: "user", Password: "encrypted", Active: true, SyncWay: SyncWayPush, Capabilities: "{}"}
 	for _, row := range []interface{}{&label, &group, &company, &journal, &lifeMetric, &subscription} {
 		if err := svc.db.Create(row).Error; err != nil {
 			t.Fatalf("create same-vault related row failed: %v", err)
@@ -587,13 +634,7 @@ func TestMoveManyRemapsVaultScopedContactDetails(t *testing.T) {
 	targetQuickTemplate := models.VaultQuickFactsTemplate{VaultID: vault2ID, Label: &quickLabel, LabelTranslationKey: &quickTranslationKey, FieldType: "text"}
 	missingQuickLabel := "Source-only quick fact"
 	missingQuickTemplate := models.VaultQuickFactsTemplate{VaultID: vault1ID, Label: &missingQuickLabel, FieldType: "text"}
-	moodTranslationKey := "mood.good"
-	moodLabel := "Good"
-	sourceMood := models.MoodTrackingParameter{VaultID: vault1ID, Label: &moodLabel, LabelTranslationKey: &moodTranslationKey, HexColor: "#00ff00"}
-	targetMood := models.MoodTrackingParameter{VaultID: vault2ID, Label: &moodLabel, LabelTranslationKey: &moodTranslationKey, HexColor: "#00ff00"}
-	missingMoodLabel := "Source-only mood"
-	missingMood := models.MoodTrackingParameter{VaultID: vault1ID, Label: &missingMoodLabel, HexColor: "#ff0000"}
-	for _, row := range []interface{}{&sourceType, &targetType, &missingType, &sourceQuickTemplate, &targetQuickTemplate, &missingQuickTemplate, &sourceMood, &targetMood, &missingMood} {
+	for _, row := range []interface{}{&sourceType, &targetType, &missingType, &sourceQuickTemplate, &targetQuickTemplate, &missingQuickTemplate} {
 		if err := svc.db.Create(row).Error; err != nil {
 			t.Fatalf("create vault-scoped row failed: %v", err)
 		}
@@ -609,9 +650,7 @@ func TestMoveManyRemapsVaultScopedContactDetails(t *testing.T) {
 		t.Fatalf("create quick fact file failed: %v", err)
 	}
 	missingQuickFact := models.QuickFact{ContactID: contactID, VaultQuickFactsTemplateID: missingQuickTemplate.ID, Content: "Delete me", FileID: &quickFile.ID}
-	matchedMood := models.MoodTrackingEvent{ContactID: contactID, MoodTrackingParameterID: sourceMood.ID, RatedAt: time.Now()}
-	missingMoodEvent := models.MoodTrackingEvent{ContactID: contactID, MoodTrackingParameterID: missingMood.ID, RatedAt: time.Now()}
-	for _, row := range []interface{}{&matchedDate, &missingDate, &untypedDate, &quickFact, &missingQuickFact, &matchedMood, &missingMoodEvent} {
+	for _, row := range []interface{}{&matchedDate, &missingDate, &untypedDate, &quickFact, &missingQuickFact} {
 		if err := svc.db.Create(row).Error; err != nil {
 			t.Fatalf("create contact detail row failed: %v", err)
 		}
@@ -652,14 +691,6 @@ func TestMoveManyRemapsVaultScopedContactDetails(t *testing.T) {
 	}
 	assertMoveCount(t, svc, &models.QuickFact{}, "id = ?", 0, missingQuickFact.ID)
 	assertMoveCount(t, svc, &models.File{}, "id = ?", 0, quickFile.ID)
-	var reloadedMood models.MoodTrackingEvent
-	if err := svc.db.First(&reloadedMood, matchedMood.ID).Error; err != nil {
-		t.Fatalf("reload mood event failed: %v", err)
-	}
-	if reloadedMood.MoodTrackingParameterID != targetMood.ID {
-		t.Fatalf("expected mood parameter %d, got %d", targetMood.ID, reloadedMood.MoodTrackingParameterID)
-	}
-	assertMoveCount(t, svc, &models.MoodTrackingEvent{}, "id = ?", 0, missingMoodEvent.ID)
 }
 
 func TestMoveManyReschedulesRemindersAndCleansSourceDavState(t *testing.T) {
@@ -681,8 +712,8 @@ func TestMoveManyReschedulesRemindersAndCleansSourceDavState(t *testing.T) {
 	if err := svc.db.Create(&oldScheduled).Error; err != nil {
 		t.Fatalf("create old schedule failed: %v", err)
 	}
-	sourceSub := models.AddressBookSubscription{VaultID: vault1ID, UserID: userID, URI: "https://dav.example.com/source/", Username: "user", Password: "encrypted", Active: true, SyncWay: SyncWayPush, Capabilities: "{}"}
-	targetSub := models.AddressBookSubscription{VaultID: vault2ID, UserID: userID, URI: "https://dav.example.com/target/", Username: "user", Password: "encrypted", Active: true, SyncWay: SyncWayPush, Capabilities: "{}"}
+	sourceSub := models.AddressBookSubscription{VaultID: vault1ID, CreatedByUserID: userID, URI: "https://dav.example.com/source/", Username: "user", Password: "encrypted", Active: true, SyncWay: SyncWayPush, Capabilities: "{}"}
+	targetSub := models.AddressBookSubscription{VaultID: vault2ID, CreatedByUserID: userID, URI: "https://dav.example.com/target/", Username: "user", Password: "encrypted", Active: true, SyncWay: SyncWayPush, Capabilities: "{}"}
 	if err := svc.db.Create(&sourceSub).Error; err != nil {
 		t.Fatalf("create source subscription failed: %v", err)
 	}
@@ -733,24 +764,38 @@ func TestMoveManyReindexesMovedContactsAndNotes(t *testing.T) {
 	}
 }
 
-func TestMoveManyReturnsSearchReindexContactError(t *testing.T) {
+func TestMoveManyReturnsCommittedResponseWhenContactSearchReindexFails(t *testing.T) {
+	// Given
 	svc, contactID, vault1ID, vault2ID, userID := setupContactMoveTest(t)
+	logOutput := captureContactMoveLogs(t)
 	indexErr := errors.New("contact index failed")
-	engine := &contactMoveRecordingSearchEngine{contactVaults: map[string]string{}, noteVaults: map[string]string{}, indexContactErr: indexErr}
+	deleteErr := errors.New("stale contact delete failed")
+	engine := &contactMoveRecordingSearchEngine{contactVaults: map[string]string{}, noteVaults: map[string]string{}, indexContactErr: indexErr, deleteDocumentErr: deleteErr}
 	svc.SetSearchService(NewSearchService(engine))
 
-	_, err := svc.MoveMany([]string{contactID}, vault1ID, vault2ID, userID)
-	if !errors.Is(err, indexErr) {
-		t.Fatalf("expected contact index error, got %v", err)
+	// When
+	response, err := svc.MoveMany([]string{contactID}, vault1ID, vault2ID, userID)
+
+	// Then
+	if err != nil {
+		t.Fatalf("move contact after committed search reindex failure: %v", err)
+	}
+	if response.MovedCount != 1 || len(response.Contacts) != 1 || response.Contacts[0].ID != contactID || response.Contacts[0].VaultID != vault2ID {
+		t.Fatalf("move response = %+v, want committed target contact", response)
 	}
 	if len(engine.deletedDocuments) != 1 || engine.deletedDocuments[0] != "contact:"+contactID {
 		t.Fatalf("expected failed contact index to delete stale document, got %#v", engine.deletedDocuments)
 	}
 	assertMoveContactRemainsInVault(t, svc, contactID, vault2ID)
+	if logText := logOutput.String(); !strings.Contains(logText, "[contact-move] failed to reindex moved search documents for target vault "+vault2ID+" contacts ["+contactID+"]:") || !strings.Contains(logText, indexErr.Error()) || !strings.Contains(logText, deleteErr.Error()) {
+		t.Fatalf("contact reindex failure log = %q, want target identity and both errors", logText)
+	}
 }
 
-func TestMoveManyReturnsSearchReindexNoteError(t *testing.T) {
+func TestMoveManyReturnsCommittedResponseWhenNoteSearchReindexFails(t *testing.T) {
+	// Given
 	svc, contactID, vault1ID, vault2ID, userID := setupContactMoveTest(t)
+	logOutput := captureContactMoveLogs(t)
 	indexErr := errors.New("note index failed")
 	engine := &contactMoveRecordingSearchEngine{contactVaults: map[string]string{}, noteVaults: map[string]string{}, indexNoteErr: indexErr}
 	svc.SetSearchService(NewSearchService(engine))
@@ -760,15 +805,24 @@ func TestMoveManyReturnsSearchReindexNoteError(t *testing.T) {
 		t.Fatalf("create note failed: %v", err)
 	}
 
-	_, err := svc.MoveMany([]string{contactID}, vault1ID, vault2ID, userID)
-	if !errors.Is(err, indexErr) {
-		t.Fatalf("expected note index error, got %v", err)
+	// When
+	response, err := svc.MoveMany([]string{contactID}, vault1ID, vault2ID, userID)
+
+	// Then
+	if err != nil {
+		t.Fatalf("move contact after committed note search reindex failure: %v", err)
+	}
+	if response.MovedCount != 1 || len(response.Contacts) != 1 || response.Contacts[0].ID != contactID || response.Contacts[0].VaultID != vault2ID {
+		t.Fatalf("move response = %+v, want committed target contact", response)
 	}
 	noteDocumentID := fmt.Sprintf("note:%d", note.ID)
 	if len(engine.deletedDocuments) != 1 || engine.deletedDocuments[0] != noteDocumentID {
 		t.Fatalf("expected failed note index to delete stale document %s, got %#v", noteDocumentID, engine.deletedDocuments)
 	}
 	assertMoveContactRemainsInVault(t, svc, contactID, vault2ID)
+	if logText := logOutput.String(); !strings.Contains(logText, "[contact-move] failed to reindex moved search documents for target vault "+vault2ID+" contacts ["+contactID+"]:") || !strings.Contains(logText, indexErr.Error()) {
+		t.Fatalf("note reindex failure log = %q, want target identity and index error", logText)
+	}
 }
 
 func TestMoveManyDeletesMissingQuickFactFileFromDiskAndDB(t *testing.T) {
@@ -846,17 +900,17 @@ func assertMoveCount(t *testing.T, svc *ContactMoveService, model interface{}, q
 	}
 }
 
-func getLifeEventTypeIDForMoveVault(t *testing.T, svc *ContactMoveService, vaultID string) uint {
+func getActivityTypeIDForMoveVault(t *testing.T, svc *ContactMoveService, vaultID string) uint {
 	t.Helper()
 	var typeID uint
-	if err := svc.db.Model(&models.LifeEventType{}).
-		Joins("JOIN life_event_categories ON life_event_categories.id = life_event_types.life_event_category_id").
-		Where("life_event_categories.vault_id = ?", vaultID).
-		Select("life_event_types.id").Limit(1).Scan(&typeID).Error; err != nil {
-		t.Fatalf("load life event type failed: %v", err)
+	if err := svc.db.Model(&models.ActivityType{}).
+		Joins("JOIN activity_categories ON activity_categories.id = activity_types.activity_category_id").
+		Where("activity_categories.vault_id = ?", vaultID).
+		Select("activity_types.id").Limit(1).Scan(&typeID).Error; err != nil {
+		t.Fatalf("load activity type failed: %v", err)
 	}
 	if typeID == 0 {
-		t.Fatal("expected seeded life event type")
+		t.Fatal("expected seeded activity type")
 	}
 	return typeID
 }
@@ -928,11 +982,12 @@ func getMoveTestUserVault(t *testing.T, svc *ContactMoveService, userID, vaultID
 }
 
 type contactMoveRecordingSearchEngine struct {
-	contactVaults    map[string]string
-	noteVaults       map[string]string
-	deletedDocuments []string
-	indexContactErr  error
-	indexNoteErr     error
+	contactVaults     map[string]string
+	noteVaults        map[string]string
+	deletedDocuments  []string
+	indexContactErr   error
+	indexNoteErr      error
+	deleteDocumentErr error
 }
 
 func (e *contactMoveRecordingSearchEngine) IndexContact(id, vaultID, firstName, lastName, nickname, jobPosition string) error {
@@ -953,7 +1008,7 @@ func (e *contactMoveRecordingSearchEngine) IndexNote(id string, vaultID, contact
 
 func (e *contactMoveRecordingSearchEngine) DeleteDocument(id string) error {
 	e.deletedDocuments = append(e.deletedDocuments, id)
-	return nil
+	return e.deleteDocumentErr
 }
 
 func (e *contactMoveRecordingSearchEngine) Search(vaultID, query string, limit, offset int) (*search.SearchResponse, error) {

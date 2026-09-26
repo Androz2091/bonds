@@ -15,7 +15,7 @@ cp server/.env.example server/.env
 | Variável | Padrão | Descrição |
 |----------|--------|-----------|
 | `DEBUG` | `false` | Ativar modo de depuração: logging de requisições, logging SQL, Swagger UI (padrão ativado) |
-| `JWT_SECRET` | — | **Obrigatório em produção.** Chave de assinatura para tokens de autenticação |
+| `JWT_SECRET` | — | **Obrigatório em produção.** Gere uma chave de 256 bits com `openssl rand -hex 32`, armazene-a e reutilize-a nas reinicializações. |
 | `SETTINGS_ENC_KEY` | _(vazio)_ | Opcional. Ativa criptografia AES-256-GCM em repouso para configurações sensíveis do sistema (senha SMTP, segredos de cliente OAuth, chaves de API de geocodificação). Veja [Criptografando Configurações Sensíveis](#criptografando-configuracoes-sensiveis) abaixo. |
 | `SERVER_PORT` | `8080` | Porta em que o servidor escuta |
 | `SERVER_HOST` | `0.0.0.0` | Endereço do host ao qual o servidor se vincula |
@@ -57,13 +57,15 @@ A maioria das configurações da aplicação é definida através do painel de *
 - **OIDC**: Provedor OpenID Connect para SSO (Authentik, Keycloak, etc.).
 - **WebAuthn**: Configuração da Parte Confiável para autenticação por chave de acesso.
 - **Telegram**: Token do bot para notificações no Telegram.
-- **Geocodificação**: Provedor e chave de API para geocodificação de endereços.
+- **Geocodificação**: Provedor ativo, precisão de privacidade, credenciais por provedor e URL do Photon auto-hospedado.
 - **Armazenamento**: Tamanho máximo de upload para arquivos e documentos (configurado na interface, não via variáveis de ambiente).
 - **Backup**: Agendamento cron, período de retenção para backups automáticos.
 - **Swagger**: Ativar ou desativar a interface de documentação da API independentemente do modo de depuração.
 
 ::: dica Migração de Variáveis de Ambiente
 Na primeira inicialização, Bonds semeia estas configurações de administração a partir de variáveis de ambiente, se presentes. Depois disso, todas as alterações são feitas através do painel de administração. Variáveis de ambiente para estas configurações são usadas apenas como valores de semente iniciais.
+
+As credenciais dos provedores de geocodificação e URLs auto-hospedadas são configuradas apenas no painel de administração; elas não são importadas de uma chave de API genérica do ambiente.
 :::
 
 ## Criptografando Configurações Sensíveis {#criptografando-configuracoes-sensiveis}
@@ -89,7 +91,8 @@ Atualmente criptografado em repouso quando a chave está definida:
 
 | Campo | Armazenamento |
 |-------|--------------|
-| `system_settings.value` para `smtp.password`, `geocoding.api_key` e qualquer chave `secret.*` | AES-256-GCM |
+| `system_settings.value` para `smtp.password` e qualquer chave `secret.*` | AES-256-GCM |
+| `geocoding_provider_configs.config` (uma configuração estruturada por provedor) | AES-256-GCM |
 | `oauth_providers.client_secret` (GitHub, Google, GitLab, Discord, OIDC) | AES-256-GCM |
 
 ::: warning Perdendo a chave
@@ -98,7 +101,7 @@ Se você definir `SETTINGS_ENC_KEY` e depois perdê-la, os segredos criptografad
 
 ## Lista de Verificação para Produção
 
-1. **Defina `JWT_SECRET`**: Use uma string forte e aleatória (32+ caracteres).
+1. **Defina `JWT_SECRET`**: Execute `export JWT_SECRET="$(openssl rand -hex 32)"` uma vez, armazene o valor de 256 bits em um ambiente protegido ou gerenciador de segredos e reutilize-o nas reinicializações. Planeje a rotação: ela invalida sessões existentes e pode exigir a reentrada das credenciais de assinaturas DAV, pois a criptografia delas deriva deste segredo.
 2. **Defina `SETTINGS_ENC_KEY`**: Recomendado para produção. Criptografa credenciais SMTP/OAuth/geocodificação em repouso.
 3. **Defina `APP_ENV=production`**: Desativa funcionalidades de depuração.
 4. **Defina `APP_URL`**: Sua URL pública, usada em e-mails e callbacks OAuth.
@@ -115,8 +118,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - JWT_SECRET=change-me-to-a-random-string
-      - SETTINGS_ENC_KEY=change-me-to-another-random-string
+      - JWT_SECRET=${JWT_SECRET:?Defina um segredo JWT persistido de 256 bits antes da inicialização}
+      - SETTINGS_ENC_KEY=${SETTINGS_ENC_KEY:?Defina uma chave de criptografia de configurações persistida antes da inicialização}
       - APP_ENV=production
       - APP_URL=https://bonds.example.com
       - DB_DSN=/data/bonds.db

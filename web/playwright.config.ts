@@ -32,6 +32,11 @@ const webAuthnEnv = [
   `WEBAUTHN_RP_ORIGINS=${shellQuote(webAuthnRpOrigins)}`,
   `WEBAUTHN_RP_DISPLAY_NAME=${shellQuote(webAuthnRpDisplayName)}`,
 ].join(' ');
+// CI already builds this exact checkout's server. Avoid compiling it again
+// while the browser is running (and exhausting runner disk or memory).
+const serverLaunch = process.env.CI || process.env.PLAYWRIGHT_USE_BUILT_SERVER
+  ? './bin/bonds-server'
+  : 'go run -ldflags="-X main.Version=e2e-test" cmd/server/main.go';
 
 export default defineConfig({
   testDir: './e2e',
@@ -51,19 +56,27 @@ export default defineConfig({
   },
   projects: [
     {
+      name: 'setup',
+      testMatch: /admin-bootstrap\.setup\.ts/,
+    },
+    {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
+      dependencies: ['setup'],
+      testIgnore: /admin-bootstrap\.setup\.ts/,
     },
   ],
   webServer: [
     {
-      command: `tmp_bleve=$(mktemp -d /tmp/bonds-e2e-bleve-XXXXXX) && rm -f ../server/bonds.db ../server/bonds.db-shm ../server/bonds.db-wal && cd ../server && SERVER_PORT=${serverPort} BLEVE_INDEX_PATH="$tmp_bleve/index.bleve" ${webAuthnEnv} go run -ldflags="-X main.Version=e2e-test" cmd/server/main.go`,
+      command: `tmp_bleve=$(mktemp -d /tmp/bonds-e2e-bleve-XXXXXX) && rm -f ../server/bonds.db ../server/bonds.db-shm ../server/bonds.db-wal && cd ../server && SERVER_PORT=${serverPort} BLEVE_INDEX_PATH="$tmp_bleve/index.bleve" ${webAuthnEnv} ${serverLaunch}`,
       port: serverPort,
+      timeout: 180000,
       reuseExistingServer: !process.env.CI,
     },
     {
-      command: `PLAYWRIGHT_SERVER_PORT=${serverPort} bun dev --host 0.0.0.0 --port ${vitePort}`,
+      command: `PLAYWRIGHT_SERVER_PORT=${serverPort} bun run build && PLAYWRIGHT_SERVER_PORT=${serverPort} bun run preview --host 0.0.0.0 --port ${vitePort}`,
       port: vitePort,
+      timeout: 180000,
       reuseExistingServer: !process.env.CI,
     },
   ],

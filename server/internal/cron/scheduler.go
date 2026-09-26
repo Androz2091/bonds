@@ -7,11 +7,13 @@ import (
 	"hash/fnv"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/naiba/bonds/internal/models"
 	robfigcron "github.com/robfig/cron/v3"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const minRunInterval = 55 * time.Second
@@ -19,22 +21,48 @@ const minRunInterval = 55 * time.Second
 type Scheduler struct {
 	cron *robfigcron.Cron
 	db   *gorm.DB
+	mu   sync.Mutex
+	jobs map[string]robfigcron.EntryID
 }
 
 func NewScheduler(db *gorm.DB) *Scheduler {
 	return &Scheduler{
 		cron: robfigcron.New(robfigcron.WithSeconds()),
 		db:   db,
+		jobs: make(map[string]robfigcron.EntryID),
 	}
 }
 
+// RegisterJob registers a new cron job.
 func (s *Scheduler) RegisterJob(spec string, name string, fn func()) error {
-	_, err := s.cron.AddFunc(spec, func() {
+	return s.UpsertJob(spec, name, fn)
+}
+
+// UpsertJob registers a job, replacing any previously registered job with the
+// same name. An empty spec removes the job. This allows settings changes to
+// take effect at runtime without a restart.
+func (s *Scheduler) UpsertJob(spec string, name string, fn func()) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if spec == "" {
+		if id, ok := s.jobs[name]; ok {
+			s.cron.Remove(id)
+			delete(s.jobs, name)
+		}
+		return nil
+	}
+
+	id, err := s.cron.AddFunc(spec, func() {
 		s.runJob(name, fn)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to register cron job %q: %w", name, err)
 	}
+	if previousID, ok := s.jobs[name]; ok {
+		s.cron.Remove(previousID)
+	}
+	s.jobs[name] = id
 	log.Printf("[cron] Registered job %q with spec %q", name, spec)
 	return nil
 }
@@ -129,11 +157,15 @@ func (s *Scheduler) acquireLockPostgres(name string) (bool, error) {
 		}
 
 		now := time.Now()
-		if err := tx.Create(&models.Cron{Command: name, LastRunAt: &now}).Error; err != nil {
-			if isUniqueConstraintErr(err) {
-				return nil
-			}
-			return err
+		create := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "command"}},
+			DoNothing: true,
+		}).Create(&models.Cron{Command: name, LastRunAt: &now})
+		if create.Error != nil {
+			return create.Error
+		}
+		if create.RowsAffected == 0 {
+			return nil
 		}
 		acquired = true
 		return nil

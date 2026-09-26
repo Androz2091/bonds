@@ -1,224 +1,367 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from "@playwright/test";
 
-async function registerUser(page: import('@playwright/test').Page) {
+async function registerUser(page: import("@playwright/test").Page) {
   const email = `se-${Date.now()}@example.com`;
-  await page.goto('/register');
-  await page.getByPlaceholder('First name').fill('Settings');
-  await page.getByPlaceholder('Last name').fill('Tester');
-  await page.getByPlaceholder('Email').fill(email);
-  await page.getByPlaceholder(/password/i).fill('password123');
-  await page.getByRole('button', { name: /create account/i }).click();
+  await page.goto("/register");
+  await page.getByPlaceholder("First name").fill("Settings");
+  await page.getByPlaceholder("Last name").fill("Tester");
+  await page.getByPlaceholder("Email").fill(email);
+  await page.getByPlaceholder(/password/i).fill("password123");
+  await page.getByRole("button", { name: /create account/i }).click();
   await expect(page).toHaveURL(/\/vaults/, { timeout: 10000 });
 }
 
-test.describe('Settings - WebAuthn and Modules', () => {
-  test('should navigate to WebAuthn settings page', async ({ page }) => {
+async function createVaultAndOpenContactLayouts(
+  page: import("@playwright/test").Page,
+) {
+  await registerUser(page);
+  await page.getByRole("button", { name: /new vault/i }).click();
+  await page.getByPlaceholder(/e\.g\. family/i).fill("Layout Vault");
+  await page
+    .getByPlaceholder(/what is this vault/i)
+    .fill("Contact layout testing");
+  await page.getByRole("button", { name: /create vault/i }).click();
+  await expect(page).toHaveURL(/\/vaults\/[a-f0-9-]{36}$/, { timeout: 20000 });
+  await page.goto(`${page.url()}/settings`);
+  await page.waitForLoadState("networkidle");
+  await expect(
+    page.getByText("Contact view layouts", { exact: true }),
+  ).toBeVisible({ timeout: 20000 });
+  await expect(page.locator('input[value="Profile and contact"]')).toBeVisible({
+    timeout: 20000,
+  });
+}
+
+function contactLayoutSectionCard(
+  page: import("@playwright/test").Page,
+  sectionName: string,
+) {
+  return page
+    .locator(`input[value="${sectionName}"]`)
+    .locator(
+      "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' ant-card ')][1]",
+    );
+}
+
+test.describe("Settings - WebAuthn and Modules", () => {
+  test("should navigate to WebAuthn settings page", async ({ page }) => {
     await registerUser(page);
-    await page.goto('/settings/webauthn');
+    await page.goto("/settings/webauthn");
+    await expect(page.getByRole("heading", { level: 4 }).first()).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(page.locator(".ant-card")).toBeVisible({ timeout: 10000 });
+  });
+
+  test("should show register passkey button on WebAuthn page", async ({
+    page,
+  }) => {
+    await registerUser(page);
+    await page.goto("/settings/webauthn");
+    await page.waitForLoadState("networkidle");
     await expect(
-      page.getByRole('heading', { level: 4 }).first()
+      page.getByRole("button").filter({ has: page.locator(".anticon-plus") }),
     ).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('.ant-card')).toBeVisible({ timeout: 10000 });
   });
 
-  test('should show register passkey button on WebAuthn page', async ({ page }) => {
+  test("should navigate to OAuth providers page", async ({ page }) => {
     await registerUser(page);
-    await page.goto('/settings/webauthn');
-    await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('button').filter({ has: page.locator('.anticon-plus') })).toBeVisible({ timeout: 10000 });
+    await page.goto("/settings/oauth");
+    await expect(page.getByRole("heading", { level: 4 }).first()).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(page.locator(".ant-card")).toBeVisible({ timeout: 10000 });
   });
 
-  test('should navigate to OAuth providers page', async ({ page }) => {
+  test("should navigate to storage info page", async ({ page }) => {
     await registerUser(page);
-    await page.goto('/settings/oauth');
+    await page.goto("/settings/storage");
+    await expect(page.getByRole("heading", { level: 4 }).first()).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(page.locator(".ant-card").first()).toBeVisible({
+      timeout: 10000,
+    });
+  });
+
+  test("should navigate to users page", async ({ page }) => {
+    await registerUser(page);
+    await page.goto("/settings/users");
     await expect(
-      page.getByRole('heading', { level: 4 }).first()
+      page.getByRole("heading", { level: 4 }).getByText("Users"),
     ).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('.ant-card')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator(".ant-card")).toBeVisible({ timeout: 10000 });
   });
 
-  test('should navigate to storage info page', async ({ page }) => {
+  test("should show current user in users list", async ({ page }) => {
     await registerUser(page);
-    await page.goto('/settings/storage');
+    await page.goto("/settings/users");
+    await page.waitForLoadState("networkidle");
     await expect(
-      page.getByRole('heading', { level: 4 }).first()
+      page.getByRole("table").getByText("Settings Tester"),
     ).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('.ant-card').first()).toBeVisible({ timeout: 10000 });
   });
 
-  test('should navigate to users page', async ({ page }) => {
+  test("should navigate to personalize page and show currencies section", async ({
+    page,
+  }) => {
     await registerUser(page);
-    await page.goto('/settings/users');
-    await expect(
-      page.getByRole('heading', { level: 4 }).getByText('Users')
-    ).toBeVisible({ timeout: 10000 });
-    await expect(page.locator('.ant-card')).toBeVisible({ timeout: 10000 });
-  });
+    await page.goto("/settings/personalize");
+    await page.waitForLoadState("networkidle");
 
-  test('should show current user in users list', async ({ page }) => {
-    await registerUser(page);
-    await page.goto('/settings/users');
-    await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table').getByText('Settings Tester')).toBeVisible({ timeout: 10000 });
-  });
+    await expect(page.getByRole("heading", { level: 4 }).first()).toBeVisible({
+      timeout: 10000,
+    });
 
-  test('should navigate to personalize page and show currencies section', async ({ page }) => {
-    await registerUser(page);
-    await page.goto('/settings/personalize');
-    await page.waitForLoadState('networkidle');
-
-    await expect(page.getByRole('heading', { level: 4 }).first()).toBeVisible({ timeout: 10000 });
-
-    const currenciesPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Currencies' });
+    const currenciesPanel = page
+      .locator(".ant-collapse-item")
+      .filter({ hasText: "Currencies" });
     await expect(currenciesPanel).toBeVisible({ timeout: 10000 });
-    await currenciesPanel.locator('.ant-collapse-header').click();
+    await currenciesPanel.locator(".ant-collapse-header").click();
 
-    await expect(page.getByPlaceholder(/search currencies/i)).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('button', { name: /enable all/i })).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole('button', { name: /disable all/i })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByPlaceholder(/search currencies/i)).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(page.getByRole("button", { name: /enable all/i })).toBeVisible(
+      { timeout: 5000 },
+    );
+    await expect(
+      page.getByRole("button", { name: /disable all/i }),
+    ).toBeVisible({ timeout: 5000 });
   });
 
-  test('should search and filter currencies', async ({ page }) => {
+  test("should search and filter currencies", async ({ page }) => {
     await registerUser(page);
-    await page.goto('/settings/personalize');
-    await page.waitForLoadState('networkidle');
+    await page.goto("/settings/personalize");
+    await page.waitForLoadState("networkidle");
 
-    const currenciesPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Currencies' });
-    await currenciesPanel.locator('.ant-collapse-header').click();
+    const currenciesPanel = page
+      .locator(".ant-collapse-item")
+      .filter({ hasText: "Currencies" });
+    await currenciesPanel.locator(".ant-collapse-header").click();
 
     const searchInput = page.getByPlaceholder(/search currencies/i);
     await expect(searchInput).toBeVisible({ timeout: 10000 });
 
-    await expect(page.locator('.ant-switch').first()).toBeVisible({ timeout: 20000 });
-
-    await searchInput.fill('USD');
-    await expect(page.locator('.ant-list-item').filter({ hasText: 'USD' })).toBeVisible({ timeout: 10000 });
-  });
-
-  test('should show currency toggle switches', async ({ page }) => {
-    await registerUser(page);
-
-    await page.goto('/settings/personalize');
-    await page.waitForLoadState('networkidle');
-
-    const currenciesPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Currencies' });
-    await currenciesPanel.locator('.ant-collapse-header').click();
-
-    await expect(page.getByPlaceholder(/search currencies/i)).toBeVisible({ timeout: 10000 });
-
-    await expect(page.locator('.ant-switch').first()).toBeVisible({ timeout: 20000 });
-  });
-
-  test('should show module reorder buttons in template page modules', async ({ page }) => {
-    await registerUser(page);
-    await page.goto('/settings/personalize');
-    await page.waitForLoadState('networkidle');
-
-    // Expand Templates section
-    const templatesPanel = page.locator('.ant-collapse-item').filter({
-      has: page.locator('.ant-collapse-header span').getByText('Templates', { exact: true }),
+    await expect(page.locator(".ant-switch").first()).toBeVisible({
+      timeout: 20000,
     });
-    await expect(templatesPanel).toBeVisible({ timeout: 10000 });
-    await templatesPanel.locator('.ant-collapse-header').click();
-    // Wait for template items to load
-    await expect(templatesPanel.locator('.ant-list-item').first()).toBeVisible({ timeout: 10000 });
 
-    // Expand the first template item to show SubItemsPanel (Pages)
-    const firstTemplateItem = templatesPanel.locator('.ant-list-item').first();
-    await firstTemplateItem.locator('button').filter({ has: page.locator('.anticon-right, .anticon-down') }).first().click();
-    await page.waitForTimeout(500);
-    // Wait for sub-items (template pages) to load
-    await expect(templatesPanel.getByText('Pages').first()).toBeVisible({ timeout: 10000 });
-
-    // Find the pages sub-area and expand modules on the first page
-    const subItemsArea = templatesPanel.locator('[style*="border-left"]').filter({ hasText: 'Pages' });
-    const pageItems = subItemsArea.locator('.ant-list-item');
-    await expect(pageItems.first()).toBeVisible({ timeout: 10000 });
-    // Click the modules icon (AppstoreOutlined) on the first page
-    const firstPageItem = pageItems.first();
-    await firstPageItem.locator('button').filter({ has: page.locator('.anticon-appstore') }).click();
-    await page.waitForTimeout(500);
-
-    // Verify modules list with up/down arrow buttons appears
-    await expect(templatesPanel.locator('.anticon-arrow-up').first()).toBeVisible({ timeout: 10000 });
-    await expect(templatesPanel.locator('.anticon-arrow-down').first()).toBeVisible({ timeout: 10000 });
+    await searchInput.fill("USD");
+    await expect(
+      page.locator(".ant-list-item").filter({ hasText: "USD" }),
+    ).toBeVisible({ timeout: 10000 });
   });
 
-  test('should reorder module position via arrow buttons', async ({ page }) => {
+  test("should show currency toggle switches", async ({ page }) => {
     await registerUser(page);
-    await page.goto('/settings/personalize');
-    await page.waitForLoadState('networkidle');
 
-    // Expand Templates section
-    const templatesPanel = page.locator('.ant-collapse-item').filter({
-      has: page.locator('.ant-collapse-header span').getByText('Templates', { exact: true }),
+    await page.goto("/settings/personalize");
+    await page.waitForLoadState("networkidle");
+
+    const currenciesPanel = page
+      .locator(".ant-collapse-item")
+      .filter({ hasText: "Currencies" });
+    await currenciesPanel.locator(".ant-collapse-header").click();
+
+    await expect(page.getByPlaceholder(/search currencies/i)).toBeVisible({
+      timeout: 10000,
     });
-    await templatesPanel.locator('.ant-collapse-header').click();
-    await expect(templatesPanel.locator('.ant-list-item').first()).toBeVisible({ timeout: 10000 });
 
-    // Expand the first template item to show SubItemsPanel (Pages)
-    const firstTemplateItem = templatesPanel.locator('.ant-list-item').first();
-    await firstTemplateItem.locator('button').filter({ has: page.locator('.anticon-right, .anticon-down') }).first().click();
-    await page.waitForTimeout(500);
-    await expect(templatesPanel.getByText('Pages').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator(".ant-switch").first()).toBeVisible({
+      timeout: 20000,
+    });
+  });
 
-    // Find the pages sub-area and expand modules on the first page
-    const subItemsArea = templatesPanel.locator('[style*="border-left"]').filter({ hasText: 'Pages' });
-    const pageItems = subItemsArea.locator('.ant-list-item');
-    await expect(pageItems.first()).toBeVisible({ timeout: 10000 });
-    const firstPageItem = pageItems.first();
-    await firstPageItem.locator('button').filter({ has: page.locator('.anticon-appstore') }).click();
-    await page.waitForTimeout(500);
-    // Wait for module list with Page Modules label
-    await expect(templatesPanel.getByText('Page Modules').first()).toBeVisible({ timeout: 10000 });
-    const modulesArea = templatesPanel.locator('[style*="border-left"]').filter({ hasText: 'Page Modules' }).last();
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
-    // Get the first module name
-    const moduleListItems = modulesArea.locator('.ant-list-item');
-    await expect(moduleListItems.first()).toBeVisible({ timeout: 10000 });
-    const firstModuleName = await moduleListItems.first().locator('span').first().textContent();
+  test("should show stable modules and reorder controls in a Vault contact layout", async ({
+    page,
+  }) => {
+    await createVaultAndOpenContactLayouts(page);
+    const contactCard = contactLayoutSectionCard(page, "Profile and contact");
 
-    // Click down arrow on the first module (within modulesArea) and wait for response
-    const downArrow = modulesArea.locator('.anticon-arrow-down').first();
-    await expect(downArrow).toBeEnabled({ timeout: 5000 });
-    const [response] = await Promise.all([
-      page.waitForResponse(resp => resp.url().includes('/position') && resp.status() === 200, { timeout: 10000 }).catch(() => null),
-      downArrow.click(),
-    ]);
-    // After reorder, the first module should have changed
-    await page.waitForTimeout(500);
-    const newFirstModuleName = await moduleListItems.first().locator('span').first().textContent();
-    // If the API succeeded, the module should have moved down
-    if (response) {
-      expect(firstModuleName).not.toBe(newFirstModuleName);
+    for (const moduleName of [
+      "Important dates",
+      "Labels",
+      "Quick Facts",
+      "Religion",
+      "Job information",
+      "Addresses",
+    ]) {
+      await expect(
+        contactCard.getByText(moduleName, { exact: true }),
+      ).toBeVisible();
     }
+    await expect(
+      contactCard.getByRole("button", { name: "Move up" }).first(),
+    ).toBeVisible();
+    await expect(
+      contactCard.getByRole("button", { name: "Move down" }).first(),
+    ).toBeVisible();
+  });
+
+  test("should reorder a module and persist the complete Vault layout", async ({
+    page,
+  }) => {
+    await createVaultAndOpenContactLayouts(page);
+    const contactCard = contactLayoutSectionCard(page, "Profile and contact");
+    const firstModule = contactCard
+      .locator(".ant-card-body .ant-typography")
+      .first();
+    const firstModuleName = await firstModule.textContent();
+    await contactCard
+      .getByRole("button", { name: "Move down" })
+      .first()
+      .click();
+    await expect(firstModule).not.toHaveText(firstModuleName ?? "");
+
+    const saveResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes("/contact-layout/templates/") &&
+        response.url().endsWith("/layout") &&
+        response.request().method() === "PUT" &&
+        response.status() < 400,
+    );
+    await page.getByRole("button", { name: /save/i }).last().click();
+    await saveResponse;
+    await expect(
+      page.getByText("Contact view saved", { exact: true }),
+    ).toBeVisible();
+  });
+
+  test("should remove Religion without removing Job information", async ({
+    page,
+  }) => {
+    await createVaultAndOpenContactLayouts(page);
+    const contactCard = contactLayoutSectionCard(page, "Profile and contact");
+    const religionRow = contactCard
+      .getByText("Religion", { exact: true })
+      .locator("xpath=parent::div");
+    await religionRow.getByRole("button", { name: "Delete" }).click();
+
+    await expect(
+      contactCard.getByText("Religion", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      contactCard.getByText("Job information", { exact: true }),
+    ).toBeVisible();
+
+    const saveResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/layout") &&
+        response.request().method() === "PUT" &&
+        response.status() < 400,
+    );
+    await page.getByRole("button", { name: /save/i }).last().click();
+    const response = await saveResponse;
+    const payload = response.request().postDataJSON() as {
+      pages: Array<{ modules: Array<{ key: string }> }>;
+    };
+    const keys = payload.pages.flatMap((layoutPage) =>
+      layoutPage.modules.map((module) => module.key),
+    );
+    expect(keys).not.toContain("religion");
+    expect(keys).toContain("jobs");
+  });
+
+  test("should hide and restore a template page without deleting it", async ({
+    page,
+  }) => {
+    await createVaultAndOpenContactLayouts(page);
+    const networkCard = contactLayoutSectionCard(page, "Relationship network");
+    const visibilitySwitch = networkCard.getByRole("switch");
+    await expect(visibilitySwitch).toBeChecked();
+
+    await visibilitySwitch.click();
+    await expect(visibilitySwitch).not.toBeChecked();
+    const hideResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/layout") &&
+        response.request().method() === "PUT" &&
+        response.status() < 400,
+    );
+    await page.getByRole("button", { name: /save/i }).last().click();
+    await hideResponse;
+    await expect(
+      contactLayoutSectionCard(page, "Relationship network").getByRole(
+        "switch",
+      ),
+    ).not.toBeChecked();
+
+    const restoredSwitch = contactLayoutSectionCard(
+      page,
+      "Relationship network",
+    ).getByRole("switch");
+    await restoredSwitch.click();
+    const restoreResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/layout") &&
+        response.request().method() === "PUT" &&
+        response.status() < 400,
+    );
+    await page.getByRole("button", { name: /save/i }).last().click();
+    await restoreResponse;
+    await expect(
+      contactLayoutSectionCard(page, "Relationship network").getByRole(
+        "switch",
+      ),
+    ).toBeChecked();
+  });
+
+  test("should add a layout section when randomUUID is unavailable", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(globalThis.crypto, "randomUUID", {
+        configurable: true,
+        value: undefined,
+      });
+    });
+    await createVaultAndOpenContactLayouts(page);
+
+    await page.getByRole("button", { name: "Add section" }).click();
+    const modal = page
+      .locator(".ant-modal")
+      .filter({ hasText: /add section/i });
+    await expect(modal).toBeVisible({ timeout: 5000 });
+    await modal.getByPlaceholder("Section name").fill("Memories");
+    await modal.getByRole("button", { name: "OK" }).click();
+
+    await expect(
+      page.locator('input[aria-label="Section name"][value="Memories"]'),
+    ).toBeVisible({
+      timeout: 5000,
+    });
+    const saveResponse = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/layout") &&
+        response.request().method() === "PUT" &&
+        response.status() < 400,
+    );
+    await page.getByRole("button", { name: /save/i }).last().click();
+    await saveResponse;
+    await page.reload();
+    await expect(
+      page.locator('input[aria-label="Section name"][value="Memories"]'),
+    ).toBeVisible({
+      timeout: 10000,
+    });
   });
 });
 
-test.describe('Settings - Personalize', () => {
-  test('personalize modules section shows module names', async ({ page }) => {
+test.describe("Settings - Personalize", () => {
+  test("personalize excludes Vault-owned contact layouts", async ({ page }) => {
     await registerUser(page);
 
-    await page.goto('/settings/personalize');
-    await page.waitForLoadState('networkidle');
-
-    // Find the Modules collapse panel and expand it
-    const modulesPanel = page.locator('.ant-collapse-item').filter({ hasText: 'Modules' });
-    await expect(modulesPanel).toBeVisible({ timeout: 10000 });
-    await modulesPanel.locator('.ant-collapse-header').click();
-
-    // Wait for the list items to load
-    await expect(modulesPanel.locator('.ant-list-item').first()).toBeVisible({ timeout: 15000 });
-
-    // Verify known module names from seed data are present
-    const moduleNames = ['Avatar', 'Contact name', 'Notes', 'Feed'];
-    for (const name of moduleNames) {
-      await expect(modulesPanel.getByText(name, { exact: false }).first()).toBeVisible({ timeout: 5000 });
-    }
-
-    // Verify list is not empty
-    const count = await modulesPanel.locator('.ant-list-item').count();
-    expect(count).toBeGreaterThan(0);
+    await page.goto("/settings/personalize");
+    await page.waitForLoadState("networkidle");
+    await expect(
+      page.getByRole("heading", { name: "Shared account data" }),
+    ).toBeVisible();
+    await expect(
+      page.locator(".ant-collapse-item").filter({ hasText: /^Templates/ }),
+    ).toHaveCount(0);
+    await expect(
+      page.locator(".ant-collapse-item").filter({ hasText: /^Modules/ }),
+    ).toHaveCount(0);
   });
 });

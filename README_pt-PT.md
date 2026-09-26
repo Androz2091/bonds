@@ -44,7 +44,7 @@ Monica é um CRM pessoal de código aberto muito apreciado com mais de 24k estre
 - **Login OAuth**: Login único com GitHub e Google.
 - **Convites de Utilizador**: Convide outros para a sua conta via email com níveis de permissão.
 - **Registo de Auditoria**: Feed de todas as alterações nos contactos.
-- **Geocodificação**: Coordenadas de endereço via Nominatim (gratuito) ou LocationIQ.
+- **Geocodificação**: Configuração extensível para Nominatim, LocationIQ, Geoapify e Photon público ou autoalojado.
 - **Notificações Shoutrrr**: Entrega de lembretes via Telegram e outros canais compatíveis com Shoutrrr.
 - **i18n**: Inglês, Chinês e Português, frontend e backend.
 
@@ -56,25 +56,23 @@ Monica é um CRM pessoal de código aberto muito apreciado com mais de 24k estre
 # Transfira o docker-compose.yml
 curl -O https://raw.githubusercontent.com/naiba/bonds/main/docker-compose.yml
 
+# Gere e exporte um segredo JWT de 256 bits neste shell
+export JWT_SECRET="$(openssl rand -hex 32)"
+
 # Inicie o serviço
 docker compose up -d
 ```
 
 Abra **http://localhost:8080** e crie a sua conta.
 
-Para personalizar as definições, edite `docker-compose.yml`:
-
-```yaml
-environment:
-  - JWT_SECRET=your-secret-key-here   # ⚠️ Altere isto!
-```
+Gere o segredo uma vez, guarde-o num ambiente protegido ou gestor de segredos e reutilize o mesmo valor em cada reinício. Planeie a rotação do JWT: invalida sessões existentes e pode exigir a reintrodução das credenciais de subscrições DAV, pois a respetiva encriptação deriva deste segredo.
 
 ### Opção 2: Binário Pré-compilado
 
 Transfira a versão mais recente dos [GitHub Releases](https://github.com/naiba/bonds/releases) e depois:
 
 ```bash
-export JWT_SECRET=your-secret-key-here
+export JWT_SECRET="$(openssl rand -hex 32)"
 ./bonds-server
 ```
 
@@ -82,7 +80,7 @@ O servidor inicia em **http://localhost:8080** com um frontend incorporado e bas
 
 ### Opção 3: Compilar a Partir do Código Fonte
 
-**Pré-requisitos**: Go 1.25+, [Bun](https://bun.sh) 1.x
+**Pré-requisitos**: Go 1.26+, [Bun](https://bun.sh) 1.x
 
 ```bash
 git clone https://github.com/naiba/bonds.git
@@ -95,7 +93,7 @@ make setup
 make build-all
 
 # Execute
-export JWT_SECRET=your-secret-key-here
+export JWT_SECRET="$(openssl rand -hex 32)"
 ./server/bin/bonds-server
 ```
 
@@ -117,7 +115,7 @@ cp server/.env.example server/.env
 | Variável | Padrão | Descrição |
 |----------|---------|-------------|
 | `DEBUG` | `false` | Ativa o modo de depuração: registo de pedidos Echo, logs SQL do GORM, Swagger UI (ativo por padrão) |
-| `JWT_SECRET` | — | **Obrigatório em produção.** Chave de assinatura para tokens de autenticação |
+| `JWT_SECRET` | — | **Obrigatório em produção.** Gere com `openssl rand -hex 32`, guarde e reutilize a chave de assinatura de 256 bits nos reinícios. |
 | `SETTINGS_ENC_KEY` | _(vazio)_ | Opcional. Ativa encriptação em repouso AES-256-GCM para segredos SMTP/OAuth/geocodificação. Veja [docs](https://naiba.github.io/bonds/guide/configuration#encrypting-sensitive-settings) |
 | `SERVER_PORT` | `8080` | Porta em que o servidor escuta |
 | `SERVER_HOST` | `0.0.0.0` | Endereço do host ao qual o servidor se vincula |
@@ -139,7 +137,7 @@ As seguintes são geridas a partir da página **Admin > Definições do Sistema*
 - **OAuth / OIDC**: Credenciais GitHub, Google e OIDC/SSO.
 - **WebAuthn**: ID do Relying Party, Nome de Exibição, Origens.
 - **Telegram**: Token do bot para notificações.
-- **Geocodificação**: Provedor (Nominatim/LocationIQ), chave da API.
+- **Geocodificação**: Fornecedor ativo, precisão de privacidade, credenciais por fornecedor e URL do Photon autoalojado.
 - **Armazenamento**: Limite máximo de tamanho de carregamento.
 - **Backup**: Agendamento Cron, dias de retenção.
 - **Swagger**: Ativar ou desativar a interface de documentação da API.
@@ -221,8 +219,8 @@ Bonds é uma reescrita do zero inspirada pelo [Monica](https://github.com/monica
 - **Indivíduos**: Gratuito para qualquer uso não comercial.
 - **Organizações**: O uso comercial requer uma licença paga do Licenciante.
 - **Proibido**: Revender, sublicenciar ou oferecer como um serviço gerido/hospedado.
-- **Data de Mudança**: 13 de junho de 2030, converte automaticamente para [AGPL-3.0](LICENSE) (mesma do Monica original).
+- **Data de Mudança**: Cada versão converte-se automaticamente para [AGPL-3.0](LICENSE) no quarto aniversário da sua primeira distribuição pública.
 
-Após a Data de Mudança, o software se torna totalmente open source sob AGPL-3.0.
+Após a sua Data de Mudança, cada versão torna-se totalmente open source sob AGPL-3.0.
 
 Ao enviar código, documentação, traduções ou qualquer outra contribuição, aceita os [termos de contribuição](CONTRIBUTING.md), incluindo a renúncia de toda propriedade e outros direitos ou reivindicações sobre essa contribuição na extensão máxima permitida por lei.

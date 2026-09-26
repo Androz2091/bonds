@@ -24,10 +24,12 @@ func NewUserManagementService(db *gorm.DB) *UserManagementService {
 }
 
 func (s *UserManagementService) List(accountID string, page, perPage int) ([]dto.UserManagementResponse, response.Meta, error) {
-	query := s.db.Where("account_id = ?", accountID)
+	query := s.db.Model(&models.User{}).
+		Joins("JOIN account_memberships ON account_memberships.user_id = users.id").
+		Where("account_memberships.account_id = ?", accountID)
 
 	var total int64
-	if err := query.Model(&models.User{}).Count(&total).Error; err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		return nil, response.Meta{}, err
 	}
 
@@ -40,12 +42,19 @@ func (s *UserManagementService) List(accountID string, page, perPage int) ([]dto
 	offset := (page - 1) * perPage
 
 	var users []models.User
-	if err := query.Order("created_at ASC").Offset(offset).Limit(perPage).Find(&users).Error; err != nil {
+	if err := query.Select("users.*").Order("users.created_at ASC").Offset(offset).Limit(perPage).Find(&users).Error; err != nil {
 		return nil, response.Meta{}, err
 	}
 	result := make([]dto.UserManagementResponse, len(users))
 	for i, u := range users {
 		result[i] = toUserManagementResponse(&u)
+		if u.AccountID != accountID {
+			var membership models.AccountMembership
+			if err := s.db.Where("user_id = ? AND account_id = ?", u.ID, accountID).First(&membership).Error; err != nil {
+				return nil, response.Meta{}, err
+			}
+			result[i].IsAdmin = membership.IsAdmin
+		}
 	}
 
 	meta := response.Meta{
@@ -59,19 +68,29 @@ func (s *UserManagementService) List(accountID string, page, perPage int) ([]dto
 
 func (s *UserManagementService) Update(id, accountID string, req dto.UpdateManagedUserRequest) (*dto.UserManagementResponse, error) {
 	var user models.User
-	if err := s.db.Where("id = ? AND account_id = ?", id, accountID).First(&user).Error; err != nil {
+	if err := s.db.Joins("JOIN account_memberships ON account_memberships.user_id = users.id").
+		Where("users.id = ? AND account_memberships.account_id = ?", id, accountID).
+		Select("users.*").First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrManagedUserNotFound
 		}
 		return nil, err
 	}
-	user.FirstName = strPtrOrNil(req.FirstName)
-	user.LastName = strPtrOrNil(req.LastName)
-	user.IsAccountAdministrator = req.IsAdmin
-	if err := s.db.Save(&user).Error; err != nil {
+	if user.AccountID == accountID {
+		user.FirstName = strPtrOrNil(req.FirstName)
+		user.LastName = strPtrOrNil(req.LastName)
+		user.IsAccountAdministrator = req.IsAdmin
+		if err := s.db.Save(&user).Error; err != nil {
+			return nil, err
+		}
+	}
+	if err := s.db.Model(&models.AccountMembership{}).
+		Where("account_id = ? AND user_id = ?", accountID, id).
+		Update("is_admin", req.IsAdmin).Error; err != nil {
 		return nil, err
 	}
 	resp := toUserManagementResponse(&user)
+	resp.IsAdmin = req.IsAdmin
 	return &resp, nil
 }
 
@@ -80,18 +99,49 @@ func (s *UserManagementService) Delete(id, accountID, currentUserID string) erro
 		return ErrCannotDeleteSelf
 	}
 	var user models.User
-	if err := s.db.Where("id = ? AND account_id = ?", id, accountID).First(&user).Error; err != nil {
+	if err := s.db.Joins("JOIN account_memberships ON account_memberships.user_id = users.id").
+		Where("users.id = ? AND account_memberships.account_id = ?", id, accountID).
+		Select("users.*").First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrManagedUserNotFound
 		}
 		return err
 	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("user_id = ?", id).Delete(&models.UserVault{}).Error; err != nil {
+		vaultIDs := tx.Model(&models.Vault{}).Select("id").Where("account_id = ?", accountID)
+		var memberships []models.UserVault
+		if err := tx.Where("user_id = ? AND vault_id IN (?) AND permission = ?", id, vaultIDs, models.PermissionManager).Find(&memberships).Error; err != nil {
+			return err
+		}
+		for _, membership := range memberships {
+			if err := ensureAnotherVaultManager(tx, membership.VaultID, membership.ID); err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("user_id = ? AND vault_id IN (?)", id, vaultIDs).Delete(&models.UserVault{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ? AND account_id = ?", id, accountID).Delete(&models.AccountMembership{}).Error; err != nil {
+			return err
+		}
+		if user.AccountID != accountID {
+			return nil
+		}
+		var another models.AccountMembership
+		if err := tx.Where("user_id = ?", id).First(&another).Error; err == nil {
+			return tx.Model(&user).Updates(map[string]interface{}{"account_id": another.AccountID, "is_account_administrator": another.IsAdmin}).Error
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		if err := tx.Where("user_id = ?", id).Delete(&models.UserNotificationChannel{}).Error; err != nil {
 			return err
+		}
+		var externalVaults int64
+		if err := tx.Model(&models.UserVault{}).Where("user_id = ?", id).Count(&externalVaults).Error; err != nil {
+			return err
+		}
+		if externalVaults != 0 {
+			return ErrAccountHasExternalVaultMembers
 		}
 		return tx.Delete(&user).Error
 	})

@@ -5,6 +5,14 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { httpClient } from "@/api";
+import type { ContactGraphRelation } from "@/api";
+import {
+  networkGraphQueryKey,
+  vaultGraphQueryKey,
+  vaultGraphURL,
+} from "@/components/networkGraphQueryKey";
+import type { VaultGraphFilters } from "@/components/networkGraphQueryKey";
+import { graphEdgeLabelForNode } from "@/components/networkGraphRelations";
 
 const { Text } = Typography;
 
@@ -18,6 +26,8 @@ interface GraphEdge {
   source: string | GraphNode;
   target: string | GraphNode;
   type: string;
+  inferred: boolean;
+  relations?: ContactGraphRelation[];
 }
 
 interface GraphData {
@@ -32,10 +42,39 @@ interface KinshipResult {
 
 interface NetworkGraphProps {
   vaultId: string;
-  contactId: string;
+  /** Omit to draw the whole vault instead of one contact's component. */
+  contactId?: string;
+  /** Vault mode only: maximum nodes to draw. 0 leaves it to the server. */
+  limit?: number;
+  /** Vault mode only: facet selections narrowing which contacts are drawn. */
+  filters?: VaultGraphFilters;
+  height?: number;
+  emptyDescription?: string;
 }
 
-export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) {
+export default function NetworkGraph(props: NetworkGraphProps) {
+  const identity = props.contactId
+    ? networkGraphQueryKey({
+        vaultId: props.vaultId,
+        contactId: props.contactId,
+      })
+    : vaultGraphQueryKey(props.vaultId, props.limit, props.filters);
+
+  // A different query represents a different canvas. Remounting prevents
+  // selected contacts and a completed kinship calculation from leaking into a
+  // filtered or differently-truncated graph, while TanStack Query still reuses
+  // the cached response for this identity.
+  return <NetworkGraphCanvas key={JSON.stringify(identity)} {...props} />;
+}
+
+function NetworkGraphCanvas({
+  vaultId,
+  contactId,
+  limit = 0,
+  filters,
+  height = 500,
+  emptyDescription,
+}: NetworkGraphProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [selectedNodes, setSelectedNodes] = useState<string[]>([]);
@@ -45,11 +84,22 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
   const navigate = useNavigate();
   const { t } = useTranslation();
 
-  const { data: graphData, isLoading: loading, isError: error } = useQuery({
-    queryKey: ["vaults", vaultId, "contacts", contactId, "graph"],
+  const {
+    data: graphData,
+    isLoading: loading,
+    isError: error,
+  } = useQuery({
+    queryKey: contactId
+      ? networkGraphQueryKey({ vaultId, contactId })
+      : vaultGraphQueryKey(vaultId, limit, filters),
     queryFn: async () => {
-      const res = await httpClient.instance.get<{ success: boolean; data: GraphData }>(
-        `/vaults/${vaultId}/contacts/${contactId}/relationships/graph`
+      const res = await httpClient.instance.get<{
+        success: boolean;
+        data: GraphData;
+      }>(
+        contactId
+          ? `/vaults/${vaultId}/contacts/${contactId}/relationships/graph`
+          : vaultGraphURL(vaultId, limit, filters),
       );
       const data = res.data?.data ?? res.data;
       if (data && "nodes" in data && "edges" in data) {
@@ -70,7 +120,7 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
 
       httpClient.instance
         .get<{ success: boolean; data: KinshipResult }>(
-          `/vaults/${vaultId}/contacts/${nodeIds[0]}/relationships/kinship/${nodeIds[1]}`
+          `/vaults/${vaultId}/contacts/${nodeIds[0]}/relationships/kinship/${nodeIds[1]}`,
         )
         .then((res) => {
           const data = res.data?.data ?? res.data;
@@ -87,7 +137,7 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
           setKinshipLoading(false);
         });
     },
-    [vaultId]
+    [vaultId],
   );
 
   const getNodeId = useCallback((node: string | GraphNode): string => {
@@ -100,19 +150,17 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
 
     const container = containerRef.current;
     const width = container.clientWidth;
-    const height = 500;
     const isMobile = width < 600;
 
     const svg = d3.select(svgRef.current);
     svg.selectAll("*").remove();
     svg.attr("viewBox", `0 0 ${width} ${height}`);
 
-    const isDark = document.documentElement.classList.contains("dark");
-    const textColor = isDark ? "#e5e7eb" : "#374151";
-    const edgeColor = isDark ? "#4b5563" : "#d1d5db";
+    const textColor = token.colorText;
+    const edgeColor = token.colorBorder;
     const centerColor = token.colorPrimary;
-    const nodeColor = isDark ? "#6b7280" : "#9ca3af";
-    const hoverEdgeColor = isDark ? "#93c5fd" : "#3b82f6";
+    const nodeColor = token.colorTextTertiary;
+    const hoverEdgeColor = token.colorInfo;
 
     const nodeRadius = isMobile ? 6 : 8;
     const centerNodeRadius = isMobile ? 9 : 12;
@@ -140,19 +188,6 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
       }
     });
 
-    g.append("defs")
-      .append("marker")
-      .attr("id", "arrowhead")
-      .attr("viewBox", "0 -5 10 10")
-      .attr("refX", 20)
-      .attr("refY", 0)
-      .attr("markerWidth", 6)
-      .attr("markerHeight", 6)
-      .attr("orient", "auto")
-      .append("path")
-      .attr("d", "M0,-5L10,0L0,5")
-      .attr("fill", edgeColor);
-
     const link = g
       .append("g")
       .selectAll<SVGLineElement, GraphEdge>("line")
@@ -160,14 +195,15 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
       .join("line")
       .attr("stroke", edgeColor)
       .attr("stroke-opacity", 0.3)
-      .attr("stroke-width", 1.5);
+      .attr("stroke-width", 1.5)
+      .attr("stroke-dasharray", (d) => (d.inferred ? "5 4" : null));
 
     const edgeLabel = g
       .append("g")
       .selectAll<SVGTextElement, GraphEdge>("text")
       .data(edges)
       .join("text")
-      .text((d) => d.type)
+      .text((d) => graphEdgeLabelForNode(d, getNodeId(d.source)))
       .attr("font-size", 10)
       .attr("fill", textColor)
       .attr("text-anchor", "middle")
@@ -192,7 +228,9 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
     node
       .append("text")
       .text((d) => d.label)
-      .attr("dy", (d) => (d.is_center ? centerNodeRadius + 14 : nodeRadius + 14))
+      .attr("dy", (d) =>
+        d.is_center ? centerNodeRadius + 14 : nodeRadius + 14,
+      )
       .attr("text-anchor", "middle")
       .attr("font-size", isMobile ? 10 : 12)
       .attr("fill", textColor)
@@ -204,7 +242,9 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
           .attr("stroke", (l) => {
             const srcId = getNodeId(l.source);
             const tgtId = getNodeId(l.target);
-            return srcId === d.id || tgtId === d.id ? hoverEdgeColor : edgeColor;
+            return srcId === d.id || tgtId === d.id
+              ? hoverEdgeColor
+              : edgeColor;
           })
           .attr("stroke-opacity", (l) => {
             const srcId = getNodeId(l.source);
@@ -217,18 +257,22 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
             return srcId === d.id || tgtId === d.id ? 2.5 : 1.5;
           });
 
-        edgeLabel.attr("opacity", (l) => {
-          const srcId = getNodeId(l.source);
-          const tgtId = getNodeId(l.target);
-          return srcId === d.id || tgtId === d.id ? 1 : 0;
-        });
+        edgeLabel
+          .text((l) => graphEdgeLabelForNode(l, d.id))
+          .attr("opacity", (l) => {
+            const srcId = getNodeId(l.source);
+            const tgtId = getNodeId(l.target);
+            return srcId === d.id || tgtId === d.id ? 1 : 0;
+          });
       })
       .on("mouseleave", () => {
         link
           .attr("stroke", edgeColor)
           .attr("stroke-opacity", 0.3)
           .attr("stroke-width", 1.5);
-        edgeLabel.attr("opacity", 0);
+        edgeLabel
+          .text((l) => graphEdgeLabelForNode(l, getNodeId(l.source)))
+          .attr("opacity", 0);
       });
 
     node.on("click", (event, d) => {
@@ -261,20 +305,29 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
 
     const drag = d3
       .drag<SVGGElement, GraphNode>()
-      .on("start", (event: d3.D3DragEvent<SVGGElement, GraphNode, GraphNode>, d) => {
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x;
-        d.fy = d.y;
-      })
-      .on("drag", (event: d3.D3DragEvent<SVGGElement, GraphNode, GraphNode>, d) => {
-        d.fx = event.x;
-        d.fy = event.y;
-      })
-      .on("end", (event: d3.D3DragEvent<SVGGElement, GraphNode, GraphNode>, d) => {
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
-      });
+      .on(
+        "start",
+        (event: d3.D3DragEvent<SVGGElement, GraphNode, GraphNode>, d) => {
+          if (!event.active) simulation.alphaTarget(0.3).restart();
+          d.fx = d.x;
+          d.fy = d.y;
+        },
+      )
+      .on(
+        "drag",
+        (event: d3.D3DragEvent<SVGGElement, GraphNode, GraphNode>, d) => {
+          d.fx = event.x;
+          d.fy = event.y;
+        },
+      )
+      .on(
+        "end",
+        (event: d3.D3DragEvent<SVGGElement, GraphNode, GraphNode>, d) => {
+          if (!event.active) simulation.alphaTarget(0);
+          d.fx = null;
+          d.fy = null;
+        },
+      );
     node.call(drag);
 
     const simulation = d3
@@ -284,7 +337,7 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
         d3
           .forceLink<GraphNode, GraphEdge>(edges)
           .id((d) => d.id)
-          .distance(linkDistance)
+          .distance(linkDistance),
       )
       .force("charge", d3.forceManyBody().strength(chargeStrength))
       .force("center", d3.forceCenter(width / 2, height / 2))
@@ -298,8 +351,21 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
         .attr("y2", (d) => (d.target as GraphNode).y ?? 0);
 
       edgeLabel
-        .attr("x", (d) => (((d.source as GraphNode).x ?? 0) + ((d.target as GraphNode).x ?? 0)) / 2)
-        .attr("y", (d) => (((d.source as GraphNode).y ?? 0) + ((d.target as GraphNode).y ?? 0)) / 2 - 6);
+        .attr(
+          "x",
+          (d) =>
+            (((d.source as GraphNode).x ?? 0) +
+              ((d.target as GraphNode).x ?? 0)) /
+            2,
+        )
+        .attr(
+          "y",
+          (d) =>
+            (((d.source as GraphNode).y ?? 0) +
+              ((d.target as GraphNode).y ?? 0)) /
+              2 -
+            6,
+        );
 
       node.attr("transform", (d) => `translate(${d.x ?? 0},${d.y ?? 0})`);
     });
@@ -307,16 +373,27 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
     return () => {
       simulation.stop();
     };
-  }, [graphData, token.colorPrimary, navigate, vaultId, getNodeId, fetchKinship]);
+  }, [
+    graphData,
+    token.colorText,
+    token.colorBorder,
+    token.colorPrimary,
+    token.colorTextTertiary,
+    token.colorInfo,
+    navigate,
+    vaultId,
+    height,
+    getNodeId,
+    fetchKinship,
+  ]);
 
   useEffect(() => {
     if (!svgRef.current || !graphData) return;
     const svg = d3.select(svgRef.current);
 
-    const isDark = document.documentElement.classList.contains("dark");
-    const edgeColor = isDark ? "#4b5563" : "#d1d5db";
+    const edgeColor = token.colorBorder;
     const centerColor = token.colorPrimary;
-    const nodeColor = isDark ? "#6b7280" : "#9ca3af";
+    const nodeColor = token.colorTextTertiary;
     const selectedColor = "#f59e0b";
     const highlightEdgeColor = "#ef4444";
 
@@ -364,7 +441,15 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
         .attr("stroke-opacity", 0.3)
         .attr("stroke-width", 1.5);
     }
-  }, [selectedNodes, kinship, graphData, token.colorPrimary, getNodeId]);
+  }, [
+    selectedNodes,
+    kinship,
+    graphData,
+    token.colorBorder,
+    token.colorPrimary,
+    token.colorTextTertiary,
+    getNodeId,
+  ]);
 
   if (loading) {
     return (
@@ -375,7 +460,11 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
   }
 
   if (error || !graphData || !graphData.nodes?.length) {
-    return <Empty description={t("modules.relationships.graph_empty")} />;
+    return (
+      <Empty
+        description={emptyDescription ?? t("modules.relationships.graph_empty")}
+      />
+    );
   }
 
   return (
@@ -384,7 +473,7 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
         ref={svgRef}
         style={{
           width: "100%",
-          height: 500,
+          height,
           background: token.colorBgContainer,
           borderRadius: token.borderRadiusLG,
           border: `1px solid ${token.colorBorderSecondary}`,
@@ -402,21 +491,49 @@ export default function NetworkGraph({ vaultId, contactId }: NetworkGraphProps) 
         }}
       >
         <Text type="secondary" style={{ fontSize: 12 }}>
-          {selectedNodes.length === 0 && t("modules.relationships.click_to_calculate")}
-          {selectedNodes.length === 1 && t("modules.relationships.click_to_calculate")}
-          {selectedNodes.length === 2 && kinshipLoading && <Spin size="small" />}
+          {selectedNodes.length === 0 &&
+            t("modules.relationships.click_to_calculate")}
+          {selectedNodes.length === 1 &&
+            t("modules.relationships.click_to_calculate")}
+          {selectedNodes.length === 2 && kinshipLoading && (
+            <Spin size="small" />
+          )}
           {selectedNodes.length === 2 &&
             !kinshipLoading &&
             kinship &&
-            t("modules.relationships.kinship_degree", { degree: kinship.degree })}
+            t("modules.relationships.kinship_degree", {
+              degree: kinship.degree,
+            })}
           {selectedNodes.length === 2 &&
             !kinshipLoading &&
             !kinship &&
             t("modules.relationships.kinship_no_path")}
         </Text>
-        <Text type="secondary" style={{ fontSize: 11 }}>
-          Ctrl+Click / Double-click to navigate
-        </Text>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {graphData.edges.some((edge) => edge.inferred) && (
+            <Text
+              type="secondary"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                fontSize: 11,
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 18,
+                  borderTop: `1px dashed ${token.colorTextSecondary}`,
+                }}
+              />
+              {t("modules.relationships.inferred_hint")}
+            </Text>
+          )}
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {t("modules.relationships.navigate_hint")}
+          </Text>
+        </div>
       </div>
     </div>
   );

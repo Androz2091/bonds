@@ -69,67 +69,11 @@ func setupRelationshipTestFull(t *testing.T) relationshipTestCtx {
 	}
 }
 
-type graphTestEnv struct {
-	svc     *RelationshipService
-	db      *gorm.DB
-	vaultID string
-	userID  string
-}
-
-func setupGraphTest(t *testing.T) (*graphTestEnv, func(firstName string) string) {
-	t.Helper()
-	db := testutil.SetupTestDB(t)
-	cfg := testutil.TestJWTConfig()
-	authSvc := NewAuthService(db, cfg)
-	vaultSvc := NewVaultService(db)
-
-	resp, err := authSvc.Register(dto.RegisterRequest{
-		FirstName: "Test",
-		LastName:  "User",
-		Email:     "graph-test@example.com",
-		Password:  "password123",
-	}, "en")
-	if err != nil {
-		t.Fatalf("Register failed: %v", err)
-	}
-
-	vault, err := vaultSvc.CreateVault(resp.User.AccountID, resp.User.ID, dto.CreateVaultRequest{Name: "Graph Vault"}, "en")
-	if err != nil {
-		t.Fatalf("CreateVault failed: %v", err)
-	}
-
-	contactSvc := NewContactService(db)
-	createContact := func(firstName string) string {
-		c, err := contactSvc.CreateContact(vault.ID, resp.User.ID, dto.CreateContactRequest{FirstName: firstName})
-		if err != nil {
-			t.Fatalf("CreateContact(%s) failed: %v", firstName, err)
-		}
-		return c.ID
-	}
-
-	env := &graphTestEnv{
-		svc:     NewRelationshipService(db),
-		db:      db,
-		vaultID: vault.ID,
-		userID:  resp.User.ID,
-	}
-	return env, createContact
-}
-
 func findRelTypeByDegree(t *testing.T, db *gorm.DB, degree int) uint {
 	t.Helper()
 	var rt models.RelationshipType
 	if err := db.Where("degree = ?", degree).First(&rt).Error; err != nil {
 		t.Fatalf("no relationship type with degree %d found: %v", degree, err)
-	}
-	return rt.ID
-}
-
-func findRelTypeNilDegree(t *testing.T, db *gorm.DB) uint {
-	t.Helper()
-	var rt models.RelationshipType
-	if err := db.Where("degree IS NULL").First(&rt).Error; err != nil {
-		t.Fatalf("no relationship type with nil degree found: %v", err)
 	}
 	return rt.ID
 }
@@ -644,7 +588,6 @@ func TestCrossVaultRelationship_WithoutEditorPermission(t *testing.T) {
 	if err := db.Create(&models.UserVault{
 		VaultID:    vault1.ID,
 		UserID:     user2ID,
-		ContactID:  "",
 		Permission: models.PermissionEditor,
 	}).Error; err != nil {
 		t.Fatalf("Add user2 to vault1 failed: %v", err)
@@ -653,7 +596,6 @@ func TestCrossVaultRelationship_WithoutEditorPermission(t *testing.T) {
 	if err := db.Create(&models.UserVault{
 		VaultID:    vault2.ID,
 		UserID:     user2ID,
-		ContactID:  "",
 		Permission: models.PermissionViewer,
 	}).Error; err != nil {
 		t.Fatalf("Add user2 to vault2 failed: %v", err)
@@ -812,7 +754,7 @@ func TestCrossVaultRelationship_ReadsHideInaccessibleRelatedVault(t *testing.T) 
 		t.Fatalf("expected inaccessible related vault relationship to be hidden, got %#v", rels)
 	}
 
-	graph, err := relSvc.GetContactGraph(sharedContact.ID, sharedVault.ID, viewer.User.ID)
+	graph, err := relSvc.GetContactGraph(sharedContact.ID, sharedVault.ID, viewer.User.ID, "en")
 	if err != nil {
 		t.Fatalf("GetContactGraph failed: %v", err)
 	}
@@ -873,13 +815,14 @@ func TestContactGraphIncludesAccessibleSecondLayerEdges(t *testing.T) {
 		t.Fatalf("Create graph relationships failed: %v", err)
 	}
 
-	graph, err := NewRelationshipService(db).GetContactGraph(center.ID, sharedVault.ID, viewer.User.ID)
+	graph, err := NewRelationshipService(db).GetContactGraph(center.ID, sharedVault.ID, viewer.User.ID, "en")
 	if err != nil {
 		t.Fatalf("GetContactGraph failed: %v", err)
 	}
 	foundSharedSecondLayerEdge := false
 	for _, edge := range graph.Edges {
-		if edge.Source == sharedLeft.ID && edge.Target == sharedRight.ID {
+		if (edge.Source == sharedLeft.ID && edge.Target == sharedRight.ID) ||
+			(edge.Source == sharedRight.ID && edge.Target == sharedLeft.ID) {
 			foundSharedSecondLayerEdge = true
 		}
 	}
@@ -987,7 +930,6 @@ func TestListContactsAcrossVaults(t *testing.T) {
 	if err := db.Create(&models.UserVault{
 		VaultID:    vault1.ID,
 		UserID:     user2ID,
-		ContactID:  "",
 		Permission: models.PermissionEditor,
 	}).Error; err != nil {
 		t.Fatalf("Add user2 to vault1 failed: %v", err)
@@ -995,7 +937,6 @@ func TestListContactsAcrossVaults(t *testing.T) {
 	if err := db.Create(&models.UserVault{
 		VaultID:    vault2.ID,
 		UserID:     user2ID,
-		ContactID:  "",
 		Permission: models.PermissionViewer,
 	}).Error; err != nil {
 		t.Fatalf("Add user2 to vault2 failed: %v", err)

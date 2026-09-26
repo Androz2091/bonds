@@ -1,9 +1,5 @@
 package dto
 
-type UpdateDefaultTabRequest struct {
-	DefaultActivityTab string `json:"default_activity_tab" validate:"required" example:"notes"`
-}
-
 type UpdatePostSliceRequest struct {
 	SliceOfLifeID uint `json:"slice_of_life_id" example:"1"`
 }

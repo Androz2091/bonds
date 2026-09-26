@@ -89,11 +89,13 @@ func (m *mockCardDAVClient) RemoveAll(ctx context.Context, path string) error {
 }
 
 type mockCardDAVClientFactory struct {
-	client CardDAVClient
-	err    error
+	client        CardDAVClient
+	err           error
+	lastTLSConfig DavTLSConfig
 }
 
-func (f *mockCardDAVClientFactory) NewClient(uri, username, password string) (CardDAVClient, error) {
+func (f *mockCardDAVClientFactory) NewClient(uri, username, password string, tlsConfig DavTLSConfig) (CardDAVClient, error) {
+	f.lastTLSConfig = tlsConfig
 	return f.client, f.err
 }
 
@@ -178,6 +180,37 @@ func TestDavSyncService_TestConnection(t *testing.T) {
 	}
 	if result.AddressBooks[0].Path != "/addressbooks/user/contacts/" {
 		t.Errorf("expected first address book path '/addressbooks/user/contacts/', got %q", result.AddressBooks[0].Path)
+	}
+}
+
+func TestDavSyncService_TestConnectionPassesTLSConfig(t *testing.T) {
+	syncSvc, _, _, _, _, _ := setupDavSyncTest(t)
+	mc := &mockCardDAVClient{
+		findPrincipalFn: func(context.Context) (string, error) { return "", nil },
+		findHomeSetFn:   func(context.Context, string) (string, error) { return "/books/", nil },
+		findAddrBooksFn: func(context.Context, string) ([]carddav.AddressBook, error) { return nil, nil },
+	}
+	factory := &mockCardDAVClientFactory{client: mc}
+	syncSvc.SetClientFactory(factory)
+
+	_, err := syncSvc.TestConnection(dto.TestDavConnectionRequest{
+		URI: "https://dav.example.com", Username: "user", Password: "pwd",
+		CustomCAPEM: "certificate", SkipTLSVerify: true,
+	})
+	if err != nil {
+		t.Fatalf("TestConnection returned error: %v", err)
+	}
+	if factory.lastTLSConfig.CustomCAPEM != "certificate" || !factory.lastTLSConfig.SkipTLSVerify {
+		t.Fatalf("TLS config was not passed to client factory: %+v", factory.lastTLSConfig)
+	}
+}
+
+func TestDefaultCardDAVClientFactoryRejectsInvalidCustomCA(t *testing.T) {
+	_, err := (&DefaultCardDAVClientFactory{}).NewClient(
+		"https://dav.example.com", "user", "pwd", DavTLSConfig{CustomCAPEM: "not a certificate"},
+	)
+	if err == nil {
+		t.Fatal("expected invalid custom CA to be rejected")
 	}
 }
 
@@ -271,6 +304,115 @@ func TestDavSyncService_SyncSubscription_FullSync(t *testing.T) {
 	}
 	if !found["Bob"] {
 		t.Error("expected Bob contact")
+	}
+
+	var states []models.ContactSubscriptionState
+	if err := syncSvc.db.Where("address_book_subscription_id = ?", sub.ID).Find(&states).Error; err != nil {
+		t.Fatalf("failed to query subscription states: %v", err)
+	}
+	if len(states) != 2 {
+		t.Fatalf("expected 2 subscription states, got %d", len(states))
+	}
+}
+
+func TestDavSyncService_PullMatchesPreviouslyPushedContactBySubscriptionState(t *testing.T) {
+	syncSvc, clientSvc, _, vaultID, userID, _ := setupDavSyncTest(t)
+
+	sub, err := clientSvc.Create(vaultID, userID, dto.CreateDavSubscriptionRequest{
+		URI:             "https://dav.example.com/",
+		AddressBookPath: "/addressbooks/user/default/",
+		Username:        "user",
+		Password:        "pwd",
+		SyncWay:         SyncWayBoth,
+	})
+	if err != nil {
+		t.Fatalf("Create subscription failed: %v", err)
+	}
+
+	contact := models.Contact{VaultID: vaultID, FirstName: strPtrOrNil("Local")}
+	if err := syncSvc.db.Create(&contact).Error; err != nil {
+		t.Fatalf("failed to create local contact: %v", err)
+	}
+	remotePath := "/addressbooks/user/default/" + contact.ID + ".vcf"
+	state := models.ContactSubscriptionState{
+		ContactID:                 contact.ID,
+		AddressBookSubscriptionID: sub.ID,
+		DistantURI:                remotePath,
+		DistantEtag:               "etag-from-push",
+	}
+	if err := syncSvc.db.Create(&state).Error; err != nil {
+		t.Fatalf("failed to create subscription state: %v", err)
+	}
+
+	remoteETag := "etag-from-push"
+	remoteFirstName := "Remote"
+	remoteLastName := "Echo"
+	mc := &mockCardDAVClient{
+		syncCollFn: func(ctx context.Context, path string, query *carddav.SyncQuery) (*carddav.SyncResponse, error) {
+			return nil, fmt.Errorf("sync not supported")
+		},
+		queryFn: func(ctx context.Context, path string, query *carddav.AddressBookQuery) ([]carddav.AddressObject, error) {
+			return []carddav.AddressObject{{
+				Path: remotePath,
+				ETag: remoteETag,
+				Card: makeVCard(remoteFirstName, remoteLastName, contact.ID),
+			}}, nil
+		},
+	}
+	syncSvc.SetClientFactory(&mockCardDAVClientFactory{client: mc})
+
+	result, err := syncSvc.SyncSubscription(context.Background(), sub.ID, vaultID)
+	if err != nil {
+		t.Fatalf("SyncSubscription failed: %v", err)
+	}
+	if result.Created != 0 || result.Updated != 0 || result.Skipped != 1 {
+		t.Fatalf("expected pushed object to be skipped, got created=%d updated=%d skipped=%d", result.Created, result.Updated, result.Skipped)
+	}
+
+	var contactCount int64
+	if err := syncSvc.db.Model(&models.Contact{}).Where("vault_id = ?", vaultID).Count(&contactCount).Error; err != nil {
+		t.Fatalf("failed to count contacts: %v", err)
+	}
+	if contactCount != 1 {
+		t.Fatalf("expected one contact after pull, got %d", contactCount)
+	}
+
+	var updated models.Contact
+	if err := syncSvc.db.First(&updated, "id = ?", contact.ID).Error; err != nil {
+		t.Fatalf("failed to reload contact: %v", err)
+	}
+	if ptrToStr(updated.FirstName) != "Local" {
+		t.Fatalf("expected local contact to remain unchanged, got %q", ptrToStr(updated.FirstName))
+	}
+
+	if err := syncSvc.db.First(&state, state.ID).Error; err != nil {
+		t.Fatalf("failed to reload subscription state: %v", err)
+	}
+	if state.DistantEtag != "etag-from-push" {
+		t.Fatalf("expected subscription ETag to be preserved, got %q", state.DistantEtag)
+	}
+
+	remoteETag = "etag-from-remote-edit"
+	remoteFirstName = "Remote"
+	remoteLastName = "Update"
+	result, err = syncSvc.SyncSubscription(context.Background(), sub.ID, vaultID)
+	if err != nil {
+		t.Fatalf("second SyncSubscription failed: %v", err)
+	}
+	if result.Created != 0 || result.Updated != 1 {
+		t.Fatalf("expected remote edit to update mapped contact, got created=%d updated=%d", result.Created, result.Updated)
+	}
+	if err := syncSvc.db.First(&updated, "id = ?", contact.ID).Error; err != nil {
+		t.Fatalf("failed to reload remotely edited contact: %v", err)
+	}
+	if ptrToStr(updated.FirstName) != "Remote" || ptrToStr(updated.LastName) != "Update" {
+		t.Fatalf("expected mapped contact to receive remote edit, got %q %q", ptrToStr(updated.FirstName), ptrToStr(updated.LastName))
+	}
+	if err := syncSvc.db.Model(&models.Contact{}).Where("vault_id = ?", vaultID).Count(&contactCount).Error; err != nil {
+		t.Fatalf("failed to recount contacts: %v", err)
+	}
+	if contactCount != 1 {
+		t.Fatalf("expected one contact after remote edit, got %d", contactCount)
 	}
 }
 

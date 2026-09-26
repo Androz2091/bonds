@@ -3,11 +3,11 @@ package services
 import (
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/models"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 var (
@@ -54,9 +54,16 @@ func (s *ContactMoveService) MoveMany(contactIDs []string, currentVaultID, targe
 	if len(uniqueContactIDs) == 0 {
 		return nil, ErrContactMoveEmpty
 	}
+	if s.davPushService != nil && currentVaultID != targetVaultID {
+		releaseDAVOperations := lockMovedContactDAVOperations(&s.davPushService.operationLocks, uniqueContactIDs)
+		defer releaseDAVOperations()
+	}
 
 	var movedContacts []models.Contact
 	var quickFactFilesToDelete []models.File
+	var sourceDAVDeleteTargets []contactRemoteDeletionTarget
+	var responses []dto.ContactResponse
+	var reindexedContacts []models.Contact
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := validateMoveVaultsAndTargetAccess(tx, currentVaultID, targetVaultID, userID); err != nil {
 			return err
@@ -65,80 +72,88 @@ func (s *ContactMoveService) MoveMany(contactIDs []string, currentVaultID, targe
 		if err != nil {
 			return err
 		}
-		if currentVaultID == targetVaultID {
-			movedContacts = contacts
-			return nil
+		if currentVaultID != targetVaultID {
+			sourceTargets, err := captureMovedContactSourceDAVDeleteTargets(tx, uniqueContactIDs, currentVaultID)
+			if err != nil {
+				return err
+			}
+			sourceDAVDeleteTargets = sourceTargets
+			if err := updateBatchFirstMetThrough(tx, uniqueContactIDs, currentVaultID); err != nil {
+				return err
+			}
+			if err := moveAllContactRows(tx, uniqueContactIDs, currentVaultID, targetVaultID); err != nil {
+				return err
+			}
+			if err := moveContactAddresses(tx, uniqueContactIDs, currentVaultID, targetVaultID); err != nil {
+				return err
+			}
+			if err := remapMovedImportantDateTypes(tx, uniqueContactIDs, currentVaultID, targetVaultID); err != nil {
+				return err
+			}
+			filesToDelete, err := remapMovedQuickFacts(tx, uniqueContactIDs, currentVaultID, targetVaultID, s.fileService != nil)
+			if err != nil {
+				return err
+			}
+			quickFactFilesToDelete = filesToDelete
+			if err := rescheduleMovedContactReminders(tx, uniqueContactIDs); err != nil {
+				return err
+			}
+			if err := moveFullyOwnedTasks(tx, uniqueContactIDs, targetVaultID); err != nil {
+				return err
+			}
+			if err := moveFullyOwnedLoans(tx, uniqueContactIDs, targetVaultID); err != nil {
+				return err
+			}
+			if err := cleanSourceScopedMovePivots(tx, uniqueContactIDs, currentVaultID); err != nil {
+				return err
+			}
+			if err := cleanMovedContactsFromActivities(tx, uniqueContactIDs, currentVaultID); err != nil {
+				return err
+			}
 		}
-		if err := updateBatchFirstMetThrough(tx, uniqueContactIDs); err != nil {
-			return err
-		}
-		if err := moveAllContactRows(tx, uniqueContactIDs, currentVaultID, targetVaultID); err != nil {
-			return err
-		}
-		if err := moveContactAddresses(tx, uniqueContactIDs, currentVaultID, targetVaultID); err != nil {
-			return err
-		}
-		if err := remapMovedImportantDateTypes(tx, uniqueContactIDs, currentVaultID, targetVaultID); err != nil {
-			return err
-		}
-		filesToDelete, err := remapMovedQuickFacts(tx, uniqueContactIDs, currentVaultID, targetVaultID, s.fileService != nil)
+		movedContacts = contacts
+
+		// Response hydration is transactional so a hydration failure cannot commit a partial move.
+		formatter, err := newContactNameFormatter(tx, userID)
 		if err != nil {
 			return err
 		}
-		quickFactFilesToDelete = filesToDelete
-		if err := remapMovedMoodTrackingEvents(tx, uniqueContactIDs, currentVaultID, targetVaultID); err != nil {
-			return err
+		responses = make([]dto.ContactResponse, 0, len(movedContacts))
+		reindexedContacts = make([]models.Contact, 0, len(movedContacts))
+		for _, movedContact := range movedContacts {
+			var contact models.Contact
+			if err := tx.Preload("FirstMetThrough", "vault_id = ?", targetVaultID).
+				First(&contact, "id = ? AND vault_id = ?", movedContact.ID, targetVaultID).Error; err != nil {
+				return err
+			}
+			resp, err := toContactResponse(&contact, false, formatter)
+			if err != nil {
+				return err
+			}
+			responses = append(responses, resp)
+			reindexedContacts = append(reindexedContacts, contact)
 		}
-		if err := rescheduleMovedContactReminders(tx, uniqueContactIDs); err != nil {
-			return err
-		}
-		if err := moveFullyOwnedTasks(tx, uniqueContactIDs, targetVaultID); err != nil {
-			return err
-		}
-		if err := moveFullyOwnedLoans(tx, uniqueContactIDs, targetVaultID); err != nil {
-			return err
-		}
-		if err := cleanSourceScopedMovePivots(tx, uniqueContactIDs, currentVaultID); err != nil {
-			return err
-		}
-		if err := cleanMovedContactsFromLifeEvents(tx, uniqueContactIDs); err != nil {
-			return err
-		}
-		movedContacts = contacts
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	for i := range quickFactFilesToDelete {
-		if err := s.fileService.deleteFileRecord(&quickFactFilesToDelete[i]); err != nil {
-			return nil, fmt.Errorf("failed to delete moved quick fact file %d: %w", quickFactFilesToDelete[i].ID, err)
+		var currentFile models.File
+		err := s.fileService.db.Select("id", "vault_id").First(&currentFile, quickFactFilesToDelete[i].ID).Error
+		if err == nil {
+			err = s.fileService.ForceDeleteFile(currentFile.ID, currentFile.VaultID)
+		}
+		if err != nil {
+			// Post-commit maintenance cannot change the result of an already committed move.
+			log.Printf("[contact-move] failed to delete moved quick fact file %d: %v", quickFactFilesToDelete[i].ID, err)
 		}
 	}
 
-	formatter, err := newContactNameFormatter(s.db, userID)
-	if err != nil {
-		return nil, err
-	}
-	responses := make([]dto.ContactResponse, 0, len(movedContacts))
-	reindexedContacts := make([]models.Contact, 0, len(movedContacts))
-	for _, movedContact := range movedContacts {
-		var contact models.Contact
-		if err := s.db.Preload("FirstMetThrough", "vault_id = ?", targetVaultID).
-			First(&contact, "id = ? AND vault_id = ?", movedContact.ID, targetVaultID).Error; err != nil {
-			return nil, err
-		}
-		resp, err := toContactResponse(&contact, false, formatter)
-		if err != nil {
-			return nil, err
-		}
-		responses = append(responses, resp)
-		reindexedContacts = append(reindexedContacts, contact)
-	}
 	if currentVaultID != targetVaultID {
+		s.runMovedContactDAVLifecycle(uniqueContactIDs, sourceDAVDeleteTargets, targetVaultID)
 		if err := s.reindexMovedSearchDocuments(uniqueContactIDs, reindexedContacts, targetVaultID); err != nil {
-			return nil, err
+			log.Printf("[contact-move] failed to reindex moved search documents for target vault %s contacts %v: %v", targetVaultID, uniqueContactIDs, err)
 		}
-		s.pushMovedContactsToDav(uniqueContactIDs, targetVaultID)
 	}
 	return &dto.BulkMoveContactsResponse{MovedCount: len(responses), Contacts: responses}, nil
 }
@@ -147,33 +162,26 @@ func (s *ContactMoveService) reindexMovedSearchDocuments(contactIDs []string, co
 	if s.searchService == nil {
 		return nil
 	}
+	errs := make([]error, 0)
 	for i := range contacts {
 		contacts[i].VaultID = targetVaultID
 		if err := s.searchService.IndexContact(&contacts[i]); err != nil {
-			_ = s.searchService.DeleteContact(contacts[i].ID)
-			return fmt.Errorf("failed to reindex moved contact %s: %w", contacts[i].ID, err)
+			deleteErr := s.searchService.DeleteContact(contacts[i].ID)
+			errs = append(errs, fmt.Errorf("failed to reindex moved contact %s: %w", contacts[i].ID, errors.Join(err, deleteErr)))
 		}
 	}
 	var notes []models.Note
 	if err := s.db.Where("contact_id IN ? AND vault_id = ?", contactIDs, targetVaultID).Find(&notes).Error; err != nil {
-		return fmt.Errorf("failed to load moved notes for search reindex: %w", err)
+		errs = append(errs, fmt.Errorf("failed to load moved notes for search reindex: %w", err))
+		return errors.Join(errs...)
 	}
 	for i := range notes {
 		if err := s.searchService.IndexNote(&notes[i]); err != nil {
-			_ = s.searchService.DeleteNote(notes[i].ID)
-			return fmt.Errorf("failed to reindex moved note %d: %w", notes[i].ID, err)
+			deleteErr := s.searchService.DeleteNote(notes[i].ID)
+			errs = append(errs, fmt.Errorf("failed to reindex moved note %d: %w", notes[i].ID, errors.Join(err, deleteErr)))
 		}
 	}
-	return nil
-}
-
-func (s *ContactMoveService) pushMovedContactsToDav(contactIDs []string, targetVaultID string) {
-	if s.davPushService == nil {
-		return
-	}
-	for _, contactID := range contactIDs {
-		go s.davPushService.PushContactChange(contactID, targetVaultID)
-	}
+	return errors.Join(errs...)
 }
 
 func validateMoveVaultsAndTargetAccess(tx *gorm.DB, currentVaultID, targetVaultID, userID string) error {
@@ -197,26 +205,19 @@ func validateMoveVaultsAndTargetAccess(tx *gorm.DB, currentVaultID, targetVaultI
 	return NewVaultService(tx).CheckUserVaultAccess(userID, targetVaultID, models.PermissionEditor)
 }
 
-func loadMovableContacts(tx *gorm.DB, contactIDs []string, currentVaultID string) ([]models.Contact, error) {
-	var contacts []models.Contact
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id IN ? AND vault_id = ? AND NOT (can_be_deleted = ? AND listed = ?)", contactIDs, currentVaultID, false, false).
-		Find(&contacts).Error; err != nil {
-		return nil, err
-	}
-	if len(contacts) != len(contactIDs) {
-		return nil, ErrContactNotFound
-	}
-	return contacts, nil
-}
-
-func updateBatchFirstMetThrough(tx *gorm.DB, contactIDs []string) error {
+func updateBatchFirstMetThrough(tx *gorm.DB, contactIDs []string, currentVaultID string) error {
 	return tx.Model(&models.Contact{}).
-		Where("id IN ? AND first_met_through_contact_id IS NOT NULL AND first_met_through_contact_id NOT IN ?", contactIDs, contactIDs).
+		Where("vault_id = ? AND id IN ? AND first_met_through_contact_id IS NOT NULL AND first_met_through_contact_id NOT IN ?", currentVaultID, contactIDs, contactIDs).
 		Update("first_met_through_contact_id", nil).Error
 }
 
 func moveAllContactRows(tx *gorm.DB, contactIDs []string, currentVaultID, targetVaultID string) error {
+	var noteIDs []uint
+	if err := tx.Model(&models.Note{}).
+		Where("contact_id IN ? AND vault_id = ?", contactIDs, currentVaultID).
+		Pluck("id", &noteIDs).Error; err != nil {
+		return err
+	}
 	if err := tx.Model(&models.Contact{}).Where("id IN ?", contactIDs).Updates(map[string]interface{}{
 		"vault_id":     targetVaultID,
 		"distant_uuid": nil,
@@ -227,6 +228,13 @@ func moveAllContactRows(tx *gorm.DB, contactIDs []string, currentVaultID, target
 	}
 	if err := tx.Model(&models.Note{}).Where("contact_id IN ? AND vault_id = ?", contactIDs, currentVaultID).Update("vault_id", targetVaultID).Error; err != nil {
 		return err
+	}
+	if len(noteIDs) > 0 {
+		if err := tx.Model(&models.ContentFileReference{}).
+			Where("vault_id = ? AND owner_type = ? AND owner_id IN ?", currentVaultID, models.ContentOwnerNote, noteIDs).
+			Update("vault_id", targetVaultID).Error; err != nil {
+			return err
+		}
 	}
 	if err := tx.Model(&models.ContactVaultUser{}).Where("contact_id IN ? AND vault_id = ?", contactIDs, currentVaultID).Update("vault_id", targetVaultID).Error; err != nil {
 		return err
@@ -422,60 +430,6 @@ func findMatchingQuickFactTemplate(tx *gorm.DB, targetVaultID string, translatio
 	return &id, nil
 }
 
-func remapMovedMoodTrackingEvents(tx *gorm.DB, contactIDs []string, currentVaultID, targetVaultID string) error {
-	type moodEventRow struct {
-		EventID             uint
-		Label               *string
-		LabelTranslationKey *string
-		HexColor            string
-	}
-	var rows []moodEventRow
-	if err := tx.Table("mood_tracking_events").
-		Select("mood_tracking_events.id AS event_id, mood_tracking_parameters.label, mood_tracking_parameters.label_translation_key, mood_tracking_parameters.hex_color").
-		Joins("JOIN mood_tracking_parameters ON mood_tracking_parameters.id = mood_tracking_events.mood_tracking_parameter_id").
-		Where("mood_tracking_events.contact_id IN ? AND mood_tracking_parameters.vault_id = ?", contactIDs, currentVaultID).
-		Scan(&rows).Error; err != nil {
-		return err
-	}
-	deleteEventIDs := make([]uint, 0)
-	for _, row := range rows {
-		targetParameterID, err := findMatchingMoodTrackingParameter(tx, targetVaultID, row.LabelTranslationKey, row.Label, row.HexColor)
-		if err != nil {
-			return err
-		}
-		if targetParameterID == nil {
-			deleteEventIDs = append(deleteEventIDs, row.EventID)
-			continue
-		}
-		if err := tx.Model(&models.MoodTrackingEvent{}).Where("id = ?", row.EventID).Update("mood_tracking_parameter_id", *targetParameterID).Error; err != nil {
-			return err
-		}
-	}
-	if len(deleteEventIDs) == 0 {
-		return nil
-	}
-	return tx.Where("id IN ?", deleteEventIDs).Delete(&models.MoodTrackingEvent{}).Error
-}
-
-func findMatchingMoodTrackingParameter(tx *gorm.DB, targetVaultID string, translationKey *string, label *string, hexColor string) (*uint, error) {
-	query := tx.Model(&models.MoodTrackingParameter{}).Where("vault_id = ?", targetVaultID)
-	if translationKey != nil && *translationKey != "" {
-		query = query.Where("label_translation_key = ?", *translationKey)
-	} else if label != nil && *label != "" {
-		query = query.Where("label = ?", *label)
-	} else {
-		query = query.Where("hex_color = ?", hexColor)
-	}
-	var id uint
-	if err := query.Select("id").Limit(1).Scan(&id).Error; err != nil {
-		return nil, err
-	}
-	if id == 0 {
-		return nil, nil
-	}
-	return &id, nil
-}
-
 func rescheduleMovedContactReminders(tx *gorm.DB, contactIDs []string) error {
 	var reminders []models.ContactReminder
 	if err := tx.Where("contact_id IN ?", contactIDs).Find(&reminders).Error; err != nil {
@@ -492,7 +446,9 @@ func rescheduleMovedContactReminders(tx *gorm.DB, contactIDs []string) error {
 		return err
 	}
 	for i := range reminders {
-		scheduleReminderForVaultUsers(tx, &reminders[i])
+		if err := scheduleReminderForVaultUsers(tx, &reminders[i]); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -588,53 +544,36 @@ func cloneFloat64Ptr(value *float64) *float64 {
 	return &copyValue
 }
 
-func cleanMovedContactsFromLifeEvents(tx *gorm.DB, contactIDs []string) error {
-	timelineIDSet := make(map[uint]struct{})
-	var lifeParticipantTimelineIDs []uint
-	if err := tx.Model(&models.LifeEvent{}).
-		Joins("JOIN life_event_participants ON life_event_participants.life_event_id = life_events.id").
-		Where("life_event_participants.contact_id IN ?", contactIDs).
-		Pluck("DISTINCT life_events.timeline_event_id", &lifeParticipantTimelineIDs).Error; err != nil {
-		return err
-	}
-	for _, timelineID := range lifeParticipantTimelineIDs {
-		timelineIDSet[timelineID] = struct{}{}
-	}
-	var directParticipantTimelineIDs []uint
-	if err := tx.Model(&models.TimelineEventParticipant{}).
+func cleanMovedContactsFromActivities(tx *gorm.DB, contactIDs []string, currentVaultID string) error {
+	var affectedActivityIDs []uint
+	if err := tx.Model(&models.ActivityParticipant{}).
 		Where("contact_id IN ?", contactIDs).
-		Pluck("DISTINCT timeline_event_id", &directParticipantTimelineIDs).Error; err != nil {
+		Distinct().
+		Pluck("activity_id", &affectedActivityIDs).Error; err != nil {
 		return err
 	}
-	for _, timelineID := range directParticipantTimelineIDs {
-		timelineIDSet[timelineID] = struct{}{}
+	if len(affectedActivityIDs) == 0 {
+		return nil
 	}
-	if err := tx.Where("contact_id IN ?", contactIDs).Delete(&models.LifeEventParticipant{}).Error; err != nil {
+	if err := tx.Where("contact_id IN ?", contactIDs).Delete(&models.ActivityParticipant{}).Error; err != nil {
 		return err
 	}
-	if err := tx.Where("contact_id IN ?", contactIDs).Delete(&models.TimelineEventParticipant{}).Error; err != nil {
+	var orphanActivityIDs []uint
+	if err := tx.Model(&models.Activity{}).
+		Where("vault_id = ? AND id IN ? AND subject_user_id IS NULL", currentVaultID, affectedActivityIDs).
+		Where("NOT EXISTS (?)", tx.Model(&models.ActivityParticipant{}).
+			Select("1").
+			Where("activity_participants.activity_id = activities.id")).
+		Pluck("id", &orphanActivityIDs).Error; err != nil {
 		return err
 	}
-	for timelineID := range timelineIDSet {
-		if err := tx.Where("timeline_event_id = ? AND id NOT IN (?)", timelineID, tx.Model(&models.LifeEventParticipant{}).Select("life_event_id")).Delete(&models.LifeEvent{}).Error; err != nil {
-			return err
-		}
-		var remaining int64
-		if err := tx.Model(&models.LifeEvent{}).Where("timeline_event_id = ?", timelineID).Count(&remaining).Error; err != nil {
-			return err
-		}
-		if remaining == 0 {
-			if err := tx.Where("timeline_event_id = ?", timelineID).Delete(&models.TimelineEventParticipant{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Delete(&models.TimelineEvent{}, timelineID).Error; err != nil {
-				return err
-			}
-			continue
-		}
-		if err := syncTimelineParticipantsToLifeEvents(tx, timelineID); err != nil {
-			return err
-		}
+	if len(orphanActivityIDs) == 0 {
+		return nil
 	}
-	return nil
+	if err := tx.Model(&models.Activity{}).
+		Where("parent_id IN ?", orphanActivityIDs).
+		Update("parent_id", nil).Error; err != nil {
+		return err
+	}
+	return tx.Where("id IN ?", orphanActivityIDs).Delete(&models.Activity{}).Error
 }

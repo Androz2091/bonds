@@ -21,6 +21,7 @@ import {
   Tooltip,
   Empty,
   Card,
+  Grid,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -77,6 +78,7 @@ export default function DavSubscriptions() {
   const { message } = App.useApp();
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const screens = Grid.useBreakpoint();
   const [form] = Form.useForm();
   const dateFormats = useDateFormat();
   const davUserPathSegment = user?.id ?? "";
@@ -168,7 +170,7 @@ export default function DavSubscriptions() {
     setTestResult(null);
     setDiscoveredAddressBooks([]);
     form.resetFields();
-    form.setFieldsValue({ sync_way: SYNC_WAY_PULL, frequency: 180 });
+    form.setFieldsValue({ sync_way: SYNC_WAY_PULL, frequency: 180, skip_tls_verify: false });
     setModalOpen(true);
   };
 
@@ -184,6 +186,8 @@ export default function DavSubscriptions() {
       frequency: record.frequency,
       active: record.active,
       address_book_path: record.address_book_path,
+      custom_ca_pem: record.custom_ca_pem,
+      skip_tls_verify: record.skip_tls_verify,
     });
     setModalOpen(true);
   };
@@ -205,6 +209,8 @@ export default function DavSubscriptions() {
         frequency: values.frequency,
         active: values.active,
         address_book_path: values.address_book_path,
+        custom_ca_pem: values.custom_ca_pem ?? "",
+        skip_tls_verify: values.skip_tls_verify ?? false,
       };
       if (values.password) {
         data.password = values.password;
@@ -225,6 +231,8 @@ export default function DavSubscriptions() {
         uri: values.uri,
         username: values.username,
         password: values.password,
+        custom_ca_pem: values.custom_ca_pem ?? "",
+        skip_tls_verify: values.skip_tls_verify ?? false,
       });
       const result = res.data as TestDavConnectionResponse;
       setTestResult(result);
@@ -436,7 +444,7 @@ export default function DavSubscriptions() {
         onOk={handleModalOk}
         confirmLoading={createMutation.isPending || updateMutation.isPending}
         destroyOnClose
-        width={560}
+        width={screens.md ? 560 : "calc(100vw - 32px)"}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item
@@ -485,6 +493,32 @@ export default function DavSubscriptions() {
                 </Select.Option>
               ))}
             </Select>
+          </Form.Item>
+          <Form.Item
+            name="custom_ca_pem"
+            label={t("vault.dav_subscriptions.custom_ca")}
+            extra={t("vault.dav_subscriptions.custom_ca_help")}
+          >
+            <Input.TextArea rows={4} placeholder="-----BEGIN CERTIFICATE-----" />
+          </Form.Item>
+          <Form.Item
+            name="skip_tls_verify"
+            label={t("vault.dav_subscriptions.skip_tls_verify")}
+            valuePropName="checked"
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(previous, current) => previous.skip_tls_verify !== current.skip_tls_verify}>
+            {({ getFieldValue }) =>
+              getFieldValue("skip_tls_verify") ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={t("vault.dav_subscriptions.skip_tls_warning")}
+                  style={{ marginBottom: 16 }}
+                />
+              ) : null
+            }
           </Form.Item>
           {editingSubscription && (
             <Form.Item
@@ -554,7 +588,7 @@ export default function DavSubscriptions() {
       <Drawer
         title={`${t("vault.dav_subscriptions.sync_logs")} - ${logsSubscription?.uri ?? ""}`}
         placement="right"
-        width={700}
+        size={screens.md ? 700 : "100%"}
         open={logsDrawerOpen}
         onClose={() => {
           setLogsDrawerOpen(false);

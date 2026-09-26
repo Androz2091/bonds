@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/middleware"
 	"github.com/naiba/bonds/internal/services"
@@ -18,8 +18,24 @@ type VaultSettingsHandler struct {
 	tagService      *services.VaultTagService
 	dateTypeService *services.VaultImportantDateTypeService
 	moodService     *services.VaultMoodParamService
-	lifeEventSvc    *services.VaultLifeEventService
+	activitySvc     *services.VaultActivityService
 	quickFactSvc    *services.VaultQuickFactTemplateService
+}
+
+// InstallLifeMilestones godoc
+//
+//	@Summary	Install life-milestone presets as activity types
+//	@Tags	vault-settings
+//	@Security	BearerAuth
+//	@Param	vault_id	path	string	true	"Vault ID"
+//	@Success	200	{object}	response.APIResponse{data=[]dto.ActivityCategoryResponse}
+//	@Router	/vaults/{vault_id}/settings/activity-presets/life-milestones [post]
+func (h *VaultSettingsHandler) InstallLifeMilestones(c *echo.Context) error {
+	items, err := h.activitySvc.InstallLifeMilestones(c.Param("vault_id"), middleware.GetLocale(c))
+	if err != nil {
+		return response.InternalError(c, "err.failed_to_create_activity_category")
+	}
+	return response.OK(c, items)
 }
 
 func NewVaultSettingsHandler(
@@ -29,7 +45,7 @@ func NewVaultSettingsHandler(
 	tagService *services.VaultTagService,
 	dateTypeService *services.VaultImportantDateTypeService,
 	moodService *services.VaultMoodParamService,
-	lifeEventSvc *services.VaultLifeEventService,
+	activitySvc *services.VaultActivityService,
 	quickFactSvc *services.VaultQuickFactTemplateService,
 ) *VaultSettingsHandler {
 	return &VaultSettingsHandler{
@@ -39,7 +55,7 @@ func NewVaultSettingsHandler(
 		tagService:      tagService,
 		dateTypeService: dateTypeService,
 		moodService:     moodService,
-		lifeEventSvc:    lifeEventSvc,
+		activitySvc:     activitySvc,
 		quickFactSvc:    quickFactSvc,
 	}
 }
@@ -57,10 +73,9 @@ func NewVaultSettingsHandler(
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings [get]
-func (h *VaultSettingsHandler) Get(c echo.Context) error {
+func (h *VaultSettingsHandler) Get(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
-	userID := middleware.GetUserID(c)
-	settings, err := h.settingsService.Get(vaultID, userID)
+	settings, err := h.settingsService.Get(vaultID)
 	if err != nil {
 		if errors.Is(err, services.ErrVaultNotFound) {
 			return response.NotFound(c, "err.vault_not_found")
@@ -87,7 +102,7 @@ func (h *VaultSettingsHandler) Get(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings [put]
-func (h *VaultSettingsHandler) Update(c echo.Context) error {
+func (h *VaultSettingsHandler) Update(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	var req dto.UpdateVaultSettingsRequest
 	if err := c.Bind(&req); err != nil {
@@ -96,8 +111,7 @@ func (h *VaultSettingsHandler) Update(c echo.Context) error {
 	if err := validateRequest(req); err != nil {
 		return response.ValidationError(c, map[string]string{"validation": err.Error()})
 	}
-	userID := middleware.GetUserID(c)
-	settings, err := h.settingsService.Update(vaultID, userID, req)
+	settings, err := h.settingsService.Update(vaultID, req)
 	if err != nil {
 		if errors.Is(err, services.ErrVaultNotFound) {
 			return response.NotFound(c, "err.vault_not_found")
@@ -122,82 +136,15 @@ func (h *VaultSettingsHandler) Update(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/visibility [put]
-func (h *VaultSettingsHandler) UpdateVisibility(c echo.Context) error {
+func (h *VaultSettingsHandler) UpdateVisibility(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	var req dto.UpdateTabVisibilityRequest
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
 	}
-	userID := middleware.GetUserID(c)
-	settings, err := h.settingsService.UpdateVisibility(vaultID, userID, req)
+	settings, err := h.settingsService.UpdateVisibility(vaultID, req)
 	if err != nil {
 		return response.InternalError(c, "err.failed_to_update_visibility")
-	}
-	return response.OK(c, settings)
-}
-
-// UpdateTemplate godoc
-//
-//	@Summary		Update default template
-//	@Description	Update the default template for a vault
-//	@Tags			vault-settings
-//	@Accept			json
-//	@Produce		json
-//	@Security		BearerAuth
-//	@Param			vault_id	path		string								true	"Vault ID"
-//	@Param			request		body		dto.UpdateDefaultTemplateRequest	true	"Template ID"
-//	@Success		200			{object}	response.APIResponse{data=dto.VaultSettingsResponse}
-//	@Failure		400			{object}	response.APIResponse
-//	@Failure		401			{object}	response.APIResponse
-//	@Failure		500			{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/template [put]
-func (h *VaultSettingsHandler) UpdateTemplate(c echo.Context) error {
-	vaultID := c.Param("vault_id")
-	var req dto.UpdateDefaultTemplateRequest
-	if err := c.Bind(&req); err != nil {
-		return response.BadRequest(c, "err.invalid_request_body", nil)
-	}
-	userID := middleware.GetUserID(c)
-	settings, err := h.settingsService.UpdateDefaultTemplate(vaultID, userID, req)
-	if err != nil {
-		return response.InternalError(c, "err.failed_to_update_template")
-	}
-	return response.OK(c, settings)
-}
-
-// UpdateNameOrder godoc
-//
-//	@Summary		Update vault name order
-//	@Description	Update or clear the vault-level name order override
-//	@Tags			vault-settings
-//	@Accept			json
-//	@Produce		json
-//	@Security		BearerAuth
-//	@Param			vault_id	path		string							true	"Vault ID"
-//	@Param			request		body		dto.UpdateVaultNameOrderRequest	true	"Name order"
-//	@Success		200			{object}	response.APIResponse{data=dto.VaultSettingsResponse}
-//	@Failure		400			{object}	response.APIResponse
-//	@Failure		401			{object}	response.APIResponse
-//	@Failure		404			{object}	response.APIResponse
-//	@Failure		422			{object}	response.APIResponse
-//	@Failure		500			{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/name-order [put]
-func (h *VaultSettingsHandler) UpdateNameOrder(c echo.Context) error {
-	vaultID := c.Param("vault_id")
-	var req dto.UpdateVaultNameOrderRequest
-	if err := c.Bind(&req); err != nil {
-		return response.BadRequest(c, "err.invalid_request_body", nil)
-	}
-	userID := middleware.GetUserID(c)
-	settings, err := h.settingsService.UpdateNameOrder(vaultID, userID, req)
-	if err != nil {
-		if errors.Is(err, services.ErrVaultNotFound) {
-			return response.NotFound(c, "err.vault_not_found")
-		}
-		if errors.Is(err, services.ErrInvalidNameOrder) {
-			return response.ValidationError(c, map[string]string{"name_order": err.Error()})
-		}
-		return response.InternalError(c, "err.failed_to_update_vault_name_order")
 	}
 	return response.OK(c, settings)
 }
@@ -214,7 +161,7 @@ func (h *VaultSettingsHandler) UpdateNameOrder(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/users [get]
-func (h *VaultSettingsHandler) ListUsers(c echo.Context) error {
+func (h *VaultSettingsHandler) ListUsers(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	users, err := h.usersService.List(vaultID)
 	if err != nil {
@@ -237,10 +184,12 @@ func (h *VaultSettingsHandler) ListUsers(c echo.Context) error {
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		404			{object}	response.APIResponse
+//	@Failure		409			{object}	response.APIResponse
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/users [post]
-func (h *VaultSettingsHandler) AddUser(c echo.Context) error {
+//
+// Deprecated: direct user addition is no longer registered; use vault invitations.
+func (h *VaultSettingsHandler) AddUser(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	var req dto.AddVaultUserRequest
 	if err := c.Bind(&req); err != nil {
@@ -280,7 +229,7 @@ func (h *VaultSettingsHandler) AddUser(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/users/{id} [put]
-func (h *VaultSettingsHandler) UpdateUserPermission(c echo.Context) error {
+func (h *VaultSettingsHandler) UpdateUserPermission(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -297,6 +246,9 @@ func (h *VaultSettingsHandler) UpdateUserPermission(c echo.Context) error {
 	if err != nil {
 		if errors.Is(err, services.ErrVaultUserNotFound) {
 			return response.NotFound(c, "err.vault_user_not_found")
+		}
+		if errors.Is(err, services.ErrLastVaultManager) {
+			return response.Conflict(c, "err.last_vault_manager")
 		}
 		return response.InternalError(c, "err.failed_to_update_vault_user")
 	}
@@ -315,9 +267,10 @@ func (h *VaultSettingsHandler) UpdateUserPermission(c echo.Context) error {
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		404			{object}	response.APIResponse
+//	@Failure		409			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/users/{id} [delete]
-func (h *VaultSettingsHandler) RemoveUser(c echo.Context) error {
+func (h *VaultSettingsHandler) RemoveUser(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -330,6 +283,9 @@ func (h *VaultSettingsHandler) RemoveUser(c echo.Context) error {
 		}
 		if errors.Is(err, services.ErrCannotRemoveSelf) {
 			return response.BadRequest(c, "err.cannot_remove_self", nil)
+		}
+		if errors.Is(err, services.ErrLastVaultManager) {
+			return response.Conflict(c, "err.last_vault_manager")
 		}
 		return response.InternalError(c, "err.failed_to_remove_vault_user")
 	}
@@ -348,7 +304,7 @@ func (h *VaultSettingsHandler) RemoveUser(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/labels [get]
-func (h *VaultSettingsHandler) ListLabels(c echo.Context) error {
+func (h *VaultSettingsHandler) ListLabels(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	labels, err := h.labelService.List(vaultID)
 	if err != nil {
@@ -373,7 +329,7 @@ func (h *VaultSettingsHandler) ListLabels(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/labels [post]
-func (h *VaultSettingsHandler) CreateLabel(c echo.Context) error {
+func (h *VaultSettingsHandler) CreateLabel(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	var req dto.CreateLabelRequest
 	if err := c.Bind(&req); err != nil {
@@ -407,7 +363,7 @@ func (h *VaultSettingsHandler) CreateLabel(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/labels/{id} [put]
-func (h *VaultSettingsHandler) UpdateLabel(c echo.Context) error {
+func (h *VaultSettingsHandler) UpdateLabel(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -443,7 +399,7 @@ func (h *VaultSettingsHandler) UpdateLabel(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/labels/{id} [delete]
-func (h *VaultSettingsHandler) DeleteLabel(c echo.Context) error {
+func (h *VaultSettingsHandler) DeleteLabel(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -470,7 +426,7 @@ func (h *VaultSettingsHandler) DeleteLabel(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/tags [get]
-func (h *VaultSettingsHandler) ListTags(c echo.Context) error {
+func (h *VaultSettingsHandler) ListTags(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	tags, err := h.tagService.List(vaultID)
 	if err != nil {
@@ -495,7 +451,7 @@ func (h *VaultSettingsHandler) ListTags(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/tags [post]
-func (h *VaultSettingsHandler) CreateTag(c echo.Context) error {
+func (h *VaultSettingsHandler) CreateTag(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	var req dto.CreateTagRequest
 	if err := c.Bind(&req); err != nil {
@@ -529,7 +485,7 @@ func (h *VaultSettingsHandler) CreateTag(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/tags/{id} [put]
-func (h *VaultSettingsHandler) UpdateTag(c echo.Context) error {
+func (h *VaultSettingsHandler) UpdateTag(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -565,7 +521,7 @@ func (h *VaultSettingsHandler) UpdateTag(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/tags/{id} [delete]
-func (h *VaultSettingsHandler) DeleteTag(c echo.Context) error {
+func (h *VaultSettingsHandler) DeleteTag(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -592,7 +548,7 @@ func (h *VaultSettingsHandler) DeleteTag(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/dateTypes [get]
-func (h *VaultSettingsHandler) ListDateTypes(c echo.Context) error {
+func (h *VaultSettingsHandler) ListDateTypes(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	types, err := h.dateTypeService.List(vaultID)
 	if err != nil {
@@ -617,7 +573,7 @@ func (h *VaultSettingsHandler) ListDateTypes(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/dateTypes [post]
-func (h *VaultSettingsHandler) CreateDateType(c echo.Context) error {
+func (h *VaultSettingsHandler) CreateDateType(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	var req dto.CreateImportantDateTypeRequest
 	if err := c.Bind(&req); err != nil {
@@ -651,7 +607,7 @@ func (h *VaultSettingsHandler) CreateDateType(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/dateTypes/{id} [put]
-func (h *VaultSettingsHandler) UpdateDateType(c echo.Context) error {
+func (h *VaultSettingsHandler) UpdateDateType(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -688,7 +644,7 @@ func (h *VaultSettingsHandler) UpdateDateType(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/dateTypes/{id} [delete]
-func (h *VaultSettingsHandler) DeleteDateType(c echo.Context) error {
+func (h *VaultSettingsHandler) DeleteDateType(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -718,7 +674,7 @@ func (h *VaultSettingsHandler) DeleteDateType(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/moodParams [get]
-func (h *VaultSettingsHandler) ListMoodParams(c echo.Context) error {
+func (h *VaultSettingsHandler) ListMoodParams(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	params, err := h.moodService.List(vaultID)
 	if err != nil {
@@ -743,7 +699,7 @@ func (h *VaultSettingsHandler) ListMoodParams(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/moodParams [post]
-func (h *VaultSettingsHandler) CreateMoodParam(c echo.Context) error {
+func (h *VaultSettingsHandler) CreateMoodParam(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	var req dto.CreateMoodTrackingParameterRequest
 	if err := c.Bind(&req); err != nil {
@@ -777,7 +733,7 @@ func (h *VaultSettingsHandler) CreateMoodParam(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/moodParams/{id} [put]
-func (h *VaultSettingsHandler) UpdateMoodParam(c echo.Context) error {
+func (h *VaultSettingsHandler) UpdateMoodParam(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -817,7 +773,7 @@ func (h *VaultSettingsHandler) UpdateMoodParam(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/moodParams/{id}/position [post]
-func (h *VaultSettingsHandler) UpdateMoodParamOrder(c echo.Context) error {
+func (h *VaultSettingsHandler) UpdateMoodParamOrder(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -850,7 +806,7 @@ func (h *VaultSettingsHandler) UpdateMoodParamOrder(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/moodParams/{id} [delete]
-func (h *VaultSettingsHandler) DeleteMoodParam(c echo.Context) error {
+func (h *VaultSettingsHandler) DeleteMoodParam(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -865,104 +821,104 @@ func (h *VaultSettingsHandler) DeleteMoodParam(c echo.Context) error {
 	return response.NoContent(c)
 }
 
-// ListLifeEventCategories godoc
+// ListActivityCategories godoc
 //
-//	@Summary		List life event categories
-//	@Description	Return all life event categories for a vault
+//	@Summary		List activity categories
+//	@Description	Return all activity categories for a vault
 //	@Tags			vault-settings
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			vault_id	path		string	true	"Vault ID"
-//	@Success		200			{object}	response.APIResponse{data=[]dto.LifeEventCategoryResponse}
+//	@Success		200			{object}	response.APIResponse{data=[]dto.ActivityCategoryResponse}
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/lifeEventCategories [get]
-func (h *VaultSettingsHandler) ListLifeEventCategories(c echo.Context) error {
+//	@Router			/vaults/{vault_id}/settings/activityCategories [get]
+func (h *VaultSettingsHandler) ListActivityCategories(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
-	cats, err := h.lifeEventSvc.ListCategories(vaultID)
+	cats, err := h.activitySvc.ListCategories(vaultID)
 	if err != nil {
-		return response.InternalError(c, "err.failed_to_list_life_event_categories")
+		return response.InternalError(c, "err.failed_to_list_activity_categories")
 	}
 	return response.OK(c, cats)
 }
 
-// CreateLifeEventCategory godoc
+// CreateActivityCategory godoc
 //
-//	@Summary		Create a life event category
-//	@Description	Create a new life event category for a vault
+//	@Summary		Create an activity category
+//	@Description	Create a new activity category for a vault
 //	@Tags			vault-settings
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			vault_id	path		string									true	"Vault ID"
-//	@Param			request		body		dto.CreateLifeEventCategoryRequest	true	"Category details"
-//	@Success		201			{object}	response.APIResponse{data=dto.LifeEventCategoryResponse}
+//	@Param			request		body		dto.CreateActivityCategoryRequest	true	"Category details"
+//	@Success		201			{object}	response.APIResponse{data=dto.ActivityCategoryResponse}
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/lifeEventCategories [post]
-func (h *VaultSettingsHandler) CreateLifeEventCategory(c echo.Context) error {
+//	@Router			/vaults/{vault_id}/settings/activityCategories [post]
+func (h *VaultSettingsHandler) CreateActivityCategory(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
-	var req dto.CreateLifeEventCategoryRequest
+	var req dto.CreateActivityCategoryRequest
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
 	}
 	if err := validateRequest(req); err != nil {
 		return response.ValidationError(c, map[string]string{"validation": err.Error()})
 	}
-	cat, err := h.lifeEventSvc.CreateCategory(vaultID, req)
+	cat, err := h.activitySvc.CreateCategory(vaultID, req)
 	if err != nil {
-		return response.InternalError(c, "err.failed_to_create_life_event_category")
+		return response.InternalError(c, "err.failed_to_create_activity_category")
 	}
 	return response.Created(c, cat)
 }
 
-// UpdateLifeEventCategory godoc
+// UpdateActivityCategory godoc
 //
-//	@Summary		Update a life event category
-//	@Description	Update an existing life event category
+//	@Summary		Update an activity category
+//	@Description	Update an existing activity category
 //	@Tags			vault-settings
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			vault_id	path		string									true	"Vault ID"
 //	@Param			id			path		integer									true	"Category ID"
-//	@Param			request		body		dto.UpdateLifeEventCategoryRequest	true	"Category details"
-//	@Success		200			{object}	response.APIResponse{data=dto.LifeEventCategoryResponse}
+//	@Param			request		body		dto.UpdateActivityCategoryRequest	true	"Category details"
+//	@Success		200			{object}	response.APIResponse{data=dto.ActivityCategoryResponse}
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/lifeEventCategories/{id} [put]
-func (h *VaultSettingsHandler) UpdateLifeEventCategory(c echo.Context) error {
+//	@Router			/vaults/{vault_id}/settings/activityCategories/{id} [put]
+func (h *VaultSettingsHandler) UpdateActivityCategory(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		return response.BadRequest(c, "err.invalid_category_id", nil)
 	}
-	var req dto.UpdateLifeEventCategoryRequest
+	var req dto.UpdateActivityCategoryRequest
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
 	}
 	if err := validateRequest(req); err != nil {
 		return response.ValidationError(c, map[string]string{"validation": err.Error()})
 	}
-	cat, err := h.lifeEventSvc.UpdateCategory(uint(id), vaultID, req)
+	cat, err := h.activitySvc.UpdateCategory(uint(id), vaultID, req)
 	if err != nil {
 		if errors.Is(err, services.ErrLifeCategoryNotFound) {
-			return response.NotFound(c, "err.life_event_category_not_found")
+			return response.NotFound(c, "err.activity_category_not_found")
 		}
-		return response.InternalError(c, "err.failed_to_update_life_event_category")
+		return response.InternalError(c, "err.failed_to_update_activity_category")
 	}
 	return response.OK(c, cat)
 }
 
-// UpdateLifeEventCategoryOrder godoc
+// UpdateActivityCategoryOrder godoc
 //
-//	@Summary		Update life event category position
-//	@Description	Update the position of a life event category
+//	@Summary		Update activity category position
+//	@Description	Update the position of an activity category
 //	@Tags			vault-settings
 //	@Accept			json
 //	@Produce		json
@@ -970,13 +926,13 @@ func (h *VaultSettingsHandler) UpdateLifeEventCategory(c echo.Context) error {
 //	@Param			vault_id	path		string						true	"Vault ID"
 //	@Param			id			path		integer						true	"Category ID"
 //	@Param			request		body		dto.UpdatePositionRequest	true	"Position"
-//	@Success		200			{object}	response.APIResponse{data=dto.LifeEventCategoryResponse}
+//	@Success		200			{object}	response.APIResponse{data=dto.ActivityCategoryResponse}
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/lifeEventCategories/{id}/position [post]
-func (h *VaultSettingsHandler) UpdateLifeEventCategoryOrder(c echo.Context) error {
+//	@Router			/vaults/{vault_id}/settings/activityCategories/{id}/position [post]
+func (h *VaultSettingsHandler) UpdateActivityCategoryOrder(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -986,20 +942,20 @@ func (h *VaultSettingsHandler) UpdateLifeEventCategoryOrder(c echo.Context) erro
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
 	}
-	cat, err := h.lifeEventSvc.UpdateCategoryPosition(uint(id), vaultID, req.Position)
+	cat, err := h.activitySvc.UpdateCategoryPosition(uint(id), vaultID, req.Position)
 	if err != nil {
 		if errors.Is(err, services.ErrLifeCategoryNotFound) {
-			return response.NotFound(c, "err.life_event_category_not_found")
+			return response.NotFound(c, "err.activity_category_not_found")
 		}
 		return response.InternalError(c, "err.failed_to_update_category_order")
 	}
 	return response.OK(c, cat)
 }
 
-// DeleteLifeEventCategory godoc
+// DeleteActivityCategory godoc
 //
-//	@Summary		Delete a life event category
-//	@Description	Delete a life event category from a vault
+//	@Summary		Delete an activity category
+//	@Description	Delete an activity category from a vault
 //	@Tags			vault-settings
 //	@Security		BearerAuth
 //	@Param			vault_id	path	string	true	"Vault ID"
@@ -1009,70 +965,70 @@ func (h *VaultSettingsHandler) UpdateLifeEventCategoryOrder(c echo.Context) erro
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/lifeEventCategories/{id} [delete]
-func (h *VaultSettingsHandler) DeleteLifeEventCategory(c echo.Context) error {
+//	@Router			/vaults/{vault_id}/settings/activityCategories/{id} [delete]
+func (h *VaultSettingsHandler) DeleteActivityCategory(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		return response.BadRequest(c, "err.invalid_category_id", nil)
 	}
-	if err := h.lifeEventSvc.DeleteCategory(uint(id), vaultID); err != nil {
+	if err := h.activitySvc.DeleteCategory(uint(id), vaultID); err != nil {
 		if errors.Is(err, services.ErrLifeCategoryNotFound) {
-			return response.NotFound(c, "err.life_event_category_not_found")
+			return response.NotFound(c, "err.activity_category_not_found")
 		}
 		if errors.Is(err, services.ErrCannotDeleteDefault) {
 			return response.BadRequest(c, "err.cannot_delete_default", nil)
 		}
-		return response.InternalError(c, "err.failed_to_delete_life_event_category")
+		return response.InternalError(c, "err.failed_to_delete_activity_category")
 	}
 	return response.NoContent(c)
 }
 
-// CreateLifeEventType godoc
+// CreateActivityType godoc
 //
-//	@Summary		Create a life event type
-//	@Description	Create a new life event type under a category
+//	@Summary		Create an activity type
+//	@Description	Create a new activity type under a category
 //	@Tags			vault-settings
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
 //	@Param			vault_id		path		string							true	"Vault ID"
 //	@Param			categoryId	path		integer							true	"Category ID"
-//	@Param			request			body		dto.CreateLifeEventTypeRequest	true	"Type details"
-//	@Success		201				{object}	response.APIResponse{data=dto.LifeEventTypeResponse}
+//	@Param			request			body		dto.CreateActivityTypeRequest	true	"Type details"
+//	@Success		201				{object}	response.APIResponse{data=dto.ActivityTypeResponse}
 //	@Failure		400				{object}	response.APIResponse
 //	@Failure		401				{object}	response.APIResponse
 //	@Failure		404				{object}	response.APIResponse
 //	@Failure		422				{object}	response.APIResponse
 //	@Failure		500				{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/lifeEventCategories/{categoryId}/types [post]
-func (h *VaultSettingsHandler) CreateLifeEventType(c echo.Context) error {
+//	@Router			/vaults/{vault_id}/settings/activityCategories/{categoryId}/types [post]
+func (h *VaultSettingsHandler) CreateActivityType(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	categoryID, err := strconv.ParseUint(c.Param("categoryId"), 10, 64)
 	if err != nil {
 		return response.BadRequest(c, "err.invalid_category_id", nil)
 	}
-	var req dto.CreateLifeEventTypeRequest
+	var req dto.CreateActivityTypeRequest
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
 	}
 	if err := validateRequest(req); err != nil {
 		return response.ValidationError(c, map[string]string{"validation": err.Error()})
 	}
-	lt, err := h.lifeEventSvc.CreateType(uint(categoryID), vaultID, req)
+	lt, err := h.activitySvc.CreateType(uint(categoryID), vaultID, req)
 	if err != nil {
 		if errors.Is(err, services.ErrLifeCategoryNotFound) {
-			return response.NotFound(c, "err.life_event_category_not_found")
+			return response.NotFound(c, "err.activity_category_not_found")
 		}
-		return response.InternalError(c, "err.failed_to_create_life_event_type")
+		return response.InternalError(c, "err.failed_to_create_activity_type")
 	}
 	return response.Created(c, lt)
 }
 
-// UpdateLifeEventType godoc
+// UpdateActivityType godoc
 //
-//	@Summary		Update a life event type
-//	@Description	Update an existing life event type
+//	@Summary		Update an activity type
+//	@Description	Update an existing activity type
 //	@Tags			vault-settings
 //	@Accept			json
 //	@Produce		json
@@ -1080,15 +1036,15 @@ func (h *VaultSettingsHandler) CreateLifeEventType(c echo.Context) error {
 //	@Param			vault_id		path		string							true	"Vault ID"
 //	@Param			categoryId	path		integer							true	"Category ID"
 //	@Param			typeId		path		integer							true	"Type ID"
-//	@Param			request			body		dto.UpdateLifeEventTypeRequest	true	"Type details"
-//	@Success		200				{object}	response.APIResponse{data=dto.LifeEventTypeResponse}
+//	@Param			request			body		dto.UpdateActivityTypeRequest	true	"Type details"
+//	@Success		200				{object}	response.APIResponse{data=dto.ActivityTypeResponse}
 //	@Failure		400				{object}	response.APIResponse
 //	@Failure		401				{object}	response.APIResponse
 //	@Failure		404				{object}	response.APIResponse
 //	@Failure		422				{object}	response.APIResponse
 //	@Failure		500				{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/lifeEventCategories/{categoryId}/types/{typeId} [put]
-func (h *VaultSettingsHandler) UpdateLifeEventType(c echo.Context) error {
+//	@Router			/vaults/{vault_id}/settings/activityCategories/{categoryId}/types/{typeId} [put]
+func (h *VaultSettingsHandler) UpdateActivityType(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	categoryID, err := strconv.ParseUint(c.Param("categoryId"), 10, 64)
 	if err != nil {
@@ -1098,30 +1054,30 @@ func (h *VaultSettingsHandler) UpdateLifeEventType(c echo.Context) error {
 	if err != nil {
 		return response.BadRequest(c, "err.invalid_type_id", nil)
 	}
-	var req dto.UpdateLifeEventTypeRequest
+	var req dto.UpdateActivityTypeRequest
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
 	}
 	if err := validateRequest(req); err != nil {
 		return response.ValidationError(c, map[string]string{"validation": err.Error()})
 	}
-	lt, err := h.lifeEventSvc.UpdateType(uint(typeID), uint(categoryID), vaultID, req)
+	lt, err := h.activitySvc.UpdateType(uint(typeID), uint(categoryID), vaultID, req)
 	if err != nil {
 		if errors.Is(err, services.ErrLifeCategoryNotFound) {
-			return response.NotFound(c, "err.life_event_category_not_found")
+			return response.NotFound(c, "err.activity_category_not_found")
 		}
 		if errors.Is(err, services.ErrLifeTypeNotFound) {
-			return response.NotFound(c, "err.life_event_type_not_found")
+			return response.NotFound(c, "err.activity_type_not_found")
 		}
-		return response.InternalError(c, "err.failed_to_update_life_event_type")
+		return response.InternalError(c, "err.failed_to_update_activity_type")
 	}
 	return response.OK(c, lt)
 }
 
-// UpdateLifeEventTypeOrder godoc
+// UpdateActivityTypeOrder godoc
 //
-//	@Summary		Update life event type position
-//	@Description	Update the position of a life event type
+//	@Summary		Update activity type position
+//	@Description	Update the position of an activity type
 //	@Tags			vault-settings
 //	@Accept			json
 //	@Produce		json
@@ -1130,13 +1086,13 @@ func (h *VaultSettingsHandler) UpdateLifeEventType(c echo.Context) error {
 //	@Param			categoryId	path		integer						true	"Category ID"
 //	@Param			typeId		path		integer						true	"Type ID"
 //	@Param			request			body		dto.UpdatePositionRequest	true	"Position"
-//	@Success		200				{object}	response.APIResponse{data=dto.LifeEventTypeResponse}
+//	@Success		200				{object}	response.APIResponse{data=dto.ActivityTypeResponse}
 //	@Failure		400				{object}	response.APIResponse
 //	@Failure		401				{object}	response.APIResponse
 //	@Failure		404				{object}	response.APIResponse
 //	@Failure		500				{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/lifeEventCategories/{categoryId}/lifeEventTypes/{typeId}/position [post]
-func (h *VaultSettingsHandler) UpdateLifeEventTypeOrder(c echo.Context) error {
+//	@Router			/vaults/{vault_id}/settings/activityCategories/{categoryId}/activityTypes/{typeId}/position [post]
+func (h *VaultSettingsHandler) UpdateActivityTypeOrder(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	categoryID, err := strconv.ParseUint(c.Param("categoryId"), 10, 64)
 	if err != nil {
@@ -1150,23 +1106,23 @@ func (h *VaultSettingsHandler) UpdateLifeEventTypeOrder(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return response.BadRequest(c, "err.invalid_request_body", nil)
 	}
-	lt, err := h.lifeEventSvc.UpdateTypePosition(uint(typeID), uint(categoryID), vaultID, req.Position)
+	lt, err := h.activitySvc.UpdateTypePosition(uint(typeID), uint(categoryID), vaultID, req.Position)
 	if err != nil {
 		if errors.Is(err, services.ErrLifeCategoryNotFound) {
-			return response.NotFound(c, "err.life_event_category_not_found")
+			return response.NotFound(c, "err.activity_category_not_found")
 		}
 		if errors.Is(err, services.ErrLifeTypeNotFound) {
-			return response.NotFound(c, "err.life_event_type_not_found")
+			return response.NotFound(c, "err.activity_type_not_found")
 		}
 		return response.InternalError(c, "err.failed_to_update_type_order")
 	}
 	return response.OK(c, lt)
 }
 
-// DeleteLifeEventType godoc
+// DeleteActivityType godoc
 //
-//	@Summary		Delete a life event type
-//	@Description	Delete a life event type from a category
+//	@Summary		Delete an activity type
+//	@Description	Delete an activity type from a category
 //	@Tags			vault-settings
 //	@Security		BearerAuth
 //	@Param			vault_id		path	string	true	"Vault ID"
@@ -1177,8 +1133,8 @@ func (h *VaultSettingsHandler) UpdateLifeEventTypeOrder(c echo.Context) error {
 //	@Failure		401				{object}	response.APIResponse
 //	@Failure		404				{object}	response.APIResponse
 //	@Failure		500				{object}	response.APIResponse
-//	@Router			/vaults/{vault_id}/settings/lifeEventCategories/{categoryId}/types/{typeId} [delete]
-func (h *VaultSettingsHandler) DeleteLifeEventType(c echo.Context) error {
+//	@Router			/vaults/{vault_id}/settings/activityCategories/{categoryId}/types/{typeId} [delete]
+func (h *VaultSettingsHandler) DeleteActivityType(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	categoryID, err := strconv.ParseUint(c.Param("categoryId"), 10, 64)
 	if err != nil {
@@ -1188,17 +1144,17 @@ func (h *VaultSettingsHandler) DeleteLifeEventType(c echo.Context) error {
 	if err != nil {
 		return response.BadRequest(c, "err.invalid_type_id", nil)
 	}
-	if err := h.lifeEventSvc.DeleteType(uint(typeID), uint(categoryID), vaultID); err != nil {
+	if err := h.activitySvc.DeleteType(uint(typeID), uint(categoryID), vaultID); err != nil {
 		if errors.Is(err, services.ErrLifeCategoryNotFound) {
-			return response.NotFound(c, "err.life_event_category_not_found")
+			return response.NotFound(c, "err.activity_category_not_found")
 		}
 		if errors.Is(err, services.ErrLifeTypeNotFound) {
-			return response.NotFound(c, "err.life_event_type_not_found")
+			return response.NotFound(c, "err.activity_type_not_found")
 		}
 		if errors.Is(err, services.ErrCannotDeleteDefault) {
 			return response.BadRequest(c, "err.cannot_delete_default", nil)
 		}
-		return response.InternalError(c, "err.failed_to_delete_life_event_type")
+		return response.InternalError(c, "err.failed_to_delete_activity_type")
 	}
 	return response.NoContent(c)
 }
@@ -1215,7 +1171,7 @@ func (h *VaultSettingsHandler) DeleteLifeEventType(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/quickFactTemplates [get]
-func (h *VaultSettingsHandler) ListQuickFactTemplates(c echo.Context) error {
+func (h *VaultSettingsHandler) ListQuickFactTemplates(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	tpls, err := h.quickFactSvc.List(vaultID)
 	if err != nil {
@@ -1240,7 +1196,7 @@ func (h *VaultSettingsHandler) ListQuickFactTemplates(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/quickFactTemplates [post]
-func (h *VaultSettingsHandler) CreateQuickFactTemplate(c echo.Context) error {
+func (h *VaultSettingsHandler) CreateQuickFactTemplate(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	var req dto.CreateQuickFactTemplateRequest
 	if err := c.Bind(&req); err != nil {
@@ -1277,7 +1233,7 @@ func (h *VaultSettingsHandler) CreateQuickFactTemplate(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/quickFactTemplates/{id} [put]
-func (h *VaultSettingsHandler) UpdateQuickFactTemplate(c echo.Context) error {
+func (h *VaultSettingsHandler) UpdateQuickFactTemplate(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -1324,7 +1280,7 @@ func isQuickFactValidationErr(err error) bool {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/quickFactTemplates/{id}/position [post]
-func (h *VaultSettingsHandler) UpdateQuickFactTemplateOrder(c echo.Context) error {
+func (h *VaultSettingsHandler) UpdateQuickFactTemplateOrder(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -1357,7 +1313,7 @@ func (h *VaultSettingsHandler) UpdateQuickFactTemplateOrder(c echo.Context) erro
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/settings/quickFactTemplates/{id} [delete]
-func (h *VaultSettingsHandler) DeleteQuickFactTemplate(c echo.Context) error {
+func (h *VaultSettingsHandler) DeleteQuickFactTemplate(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {

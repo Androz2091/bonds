@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Card,
@@ -18,6 +18,8 @@ import {
   Col,
   Segmented,
   Image,
+  Space,
+  Checkbox,
 } from "antd";
 import {
   PlusOutlined,
@@ -30,7 +32,14 @@ import {
 } from "@ant-design/icons";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api";
-import type { Post, Photo, APIError, JournalMetricResponse, SliceOfLifeResponse, UserPreferences } from "@/api";
+import type {
+  Post,
+  Photo,
+  APIError,
+  JournalMetricResponse,
+  SliceOfLifeResponse,
+  UserPreferences,
+} from "@/api";
 import { useTranslation } from "react-i18next";
 import dayjs from "dayjs";
 import { useDateFormat, formatDate } from "@/utils/dateFormat";
@@ -38,8 +47,21 @@ import CalendarAwareDatePicker from "@/components/CalendarAwareDatePicker";
 import LinkifiedText from "@/components/LinkifiedText";
 import { buildCalendarAwareValue } from "@/components/calendarAwareDateValue";
 import type { CalendarAwareDateValue } from "@/components/calendarAwareDateValue";
+import MarkdownEditor from "@/components/markdown/MarkdownEditor";
+import PostContactTags from "@/components/journal/PostContactTags";
+import { contactIdsFromMentions } from "@/components/journal/contactMentionSerialization";
 
 const { Title, Text } = Typography;
+
+type CreatePostFormValues = {
+  readonly title: string;
+  readonly written_at: CalendarAwareDateValue;
+};
+
+type CreatePostMutationVariables = {
+  readonly revision: number;
+  readonly payload: Parameters<typeof api.posts.journalsPostsCreate>[2];
+};
 
 export default function JournalDetail() {
   const { id, journalId } = useParams<{ id: string; journalId: string }>();
@@ -48,6 +70,12 @@ export default function JournalDetail() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm();
+  const [postBody, setPostBody] = useState("");
+  const [updateLastContacted, setUpdateLastContacted] = useState(false);
+  const postDraftRevisionRef = useRef(0);
+  const advancePostDraftRevision = () => {
+    postDraftRevisionRef.current += 1;
+  };
   const queryClient = useQueryClient();
   const { message } = App.useApp();
   const { t } = useTranslation();
@@ -70,13 +98,18 @@ export default function JournalDetail() {
   const [activeSection, setActiveSection] = useState<string>("posts");
 
   const [sliceModalOpen, setSliceModalOpen] = useState(false);
-  const [editingSlice, setEditingSlice] = useState<SliceOfLifeResponse | null>(null);
+  const [editingSlice, setEditingSlice] = useState<SliceOfLifeResponse | null>(
+    null,
+  );
   const [sliceForm] = Form.useForm();
 
   const { data: journal, isLoading } = useQuery({
     queryKey: ["vaults", vaultId, "journals", jId],
     queryFn: async () => {
-      const res = await api.journals.journalsDetail(String(vaultId), Number(jId));
+      const res = await api.journals.journalsDetail(
+        String(vaultId),
+        Number(jId),
+      );
       return res.data!;
     },
     enabled: !!vaultId && !!jId,
@@ -85,7 +118,10 @@ export default function JournalDetail() {
   const { data: metrics = [] } = useQuery({
     queryKey: ["vaults", vaultId, "journals", jId, "metrics"],
     queryFn: async () => {
-      const res = await api.journalMetrics.journalsMetricsList(String(vaultId), Number(jId));
+      const res = await api.journalMetrics.journalsMetricsList(
+        String(vaultId),
+        Number(jId),
+      );
       return res.data ?? [];
     },
     enabled: !!vaultId && !!jId,
@@ -94,7 +130,10 @@ export default function JournalDetail() {
   const { data: slices = [] } = useQuery({
     queryKey: ["vaults", vaultId, "journals", jId, "slices"],
     queryFn: async () => {
-      const res = await api.slicesOfLife.journalsSlicesList(String(vaultId), Number(jId));
+      const res = await api.slicesOfLife.journalsSlicesList(
+        String(vaultId),
+        Number(jId),
+      );
       return res.data ?? [];
     },
     enabled: !!vaultId && !!jId,
@@ -103,7 +142,10 @@ export default function JournalDetail() {
   const { data: allPosts = [] } = useQuery({
     queryKey: ["vaults", vaultId, "journals", jId, "posts"],
     queryFn: async () => {
-      const res = await api.posts.journalsPostsList(String(vaultId), Number(jId));
+      const res = await api.posts.journalsPostsList(
+        String(vaultId),
+        Number(jId),
+      );
       return res.data ?? [];
     },
     enabled: !!vaultId && !!jId,
@@ -114,7 +156,11 @@ export default function JournalDetail() {
   const { data: yearPosts } = useQuery({
     queryKey: ["vaults", vaultId, "journals", jId, "posts", "year", yearNum],
     queryFn: async () => {
-      const res = await api.journals.journalsYearsDetail(String(vaultId), Number(jId), yearNum!);
+      const res = await api.journals.journalsYearsDetail(
+        String(vaultId),
+        Number(jId),
+        yearNum!,
+      );
       return (res.data ?? []) as Post[];
     },
     enabled: !!vaultId && !!jId && yearNum !== null,
@@ -133,7 +179,10 @@ export default function JournalDetail() {
   const { data: journalPhotos = [] } = useQuery({
     queryKey: ["vaults", vaultId, "journals", jId, "photos"],
     queryFn: async () => {
-      const res = await api.journals.journalsPhotosList(String(vaultId), Number(jId));
+      const res = await api.journals.journalsPhotosList(
+        String(vaultId),
+        Number(jId),
+      );
       return (res.data ?? []) as Photo[];
     },
     enabled: !!vaultId && !!jId && activeSection === "photos",
@@ -141,9 +190,13 @@ export default function JournalDetail() {
 
   const createMetricMutation = useMutation({
     mutationFn: (label: string) =>
-      api.journalMetrics.journalsMetricsCreate(String(vaultId), Number(jId), { label }),
+      api.journalMetrics.journalsMetricsCreate(String(vaultId), Number(jId), {
+        label,
+      }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vaults", vaultId, "journals", jId, "metrics"] });
+      queryClient.invalidateQueries({
+        queryKey: ["vaults", vaultId, "journals", jId, "metrics"],
+      });
       setMetricInput("");
       setIsAddingMetric(false);
       message.success(t("vault.journal_detail.metric_added"));
@@ -153,9 +206,15 @@ export default function JournalDetail() {
 
   const deleteMetricMutation = useMutation({
     mutationFn: (metricId: number) =>
-      api.journalMetrics.journalsMetricsDelete(String(vaultId), Number(jId), metricId),
+      api.journalMetrics.journalsMetricsDelete(
+        String(vaultId),
+        Number(jId),
+        metricId,
+      ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vaults", vaultId, "journals", jId, "metrics"] });
+      queryClient.invalidateQueries({
+        queryKey: ["vaults", vaultId, "journals", jId, "metrics"],
+      });
       message.success(t("vault.journal_detail.metric_deleted"));
     },
     onError: (e: APIError) => message.error(e.message),
@@ -168,7 +227,9 @@ export default function JournalDetail() {
         description: values.description,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vaults", vaultId, "journals", jId, "slices"] });
+      queryClient.invalidateQueries({
+        queryKey: ["vaults", vaultId, "journals", jId, "slices"],
+      });
       setSliceModalOpen(false);
       sliceForm.resetFields();
       message.success(t("vault.journal_detail.slice_created"));
@@ -178,12 +239,19 @@ export default function JournalDetail() {
 
   const updateSliceMutation = useMutation({
     mutationFn: (values: { id: number; name: string; description?: string }) =>
-      api.slicesOfLife.journalsSlicesUpdate(String(vaultId), Number(jId), values.id, {
-        name: values.name,
-        description: values.description,
-      }),
+      api.slicesOfLife.journalsSlicesUpdate(
+        String(vaultId),
+        Number(jId),
+        values.id,
+        {
+          name: values.name,
+          description: values.description,
+        },
+      ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vaults", vaultId, "journals", jId, "slices"] });
+      queryClient.invalidateQueries({
+        queryKey: ["vaults", vaultId, "journals", jId, "slices"],
+      });
       setSliceModalOpen(false);
       setEditingSlice(null);
       sliceForm.resetFields();
@@ -194,9 +262,15 @@ export default function JournalDetail() {
 
   const deleteSliceMutation = useMutation({
     mutationFn: (sliceId: number) =>
-      api.slicesOfLife.journalsSlicesDelete(String(vaultId), Number(jId), sliceId),
+      api.slicesOfLife.journalsSlicesDelete(
+        String(vaultId),
+        Number(jId),
+        sliceId,
+      ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vaults", vaultId, "journals", jId, "slices"] });
+      queryClient.invalidateQueries({
+        queryKey: ["vaults", vaultId, "journals", jId, "slices"],
+      });
       message.success(t("vault.journal_detail.slice_deleted"));
     },
     onError: (e: APIError) => message.error(e.message),
@@ -216,9 +290,16 @@ export default function JournalDetail() {
 
   const setCoverMutation = useMutation({
     mutationFn: ({ sliceId, fileId }: { sliceId: number; fileId: number }) =>
-      api.slicesOfLife.journalsSlicesCoverUpdate(String(vaultId), Number(jId), sliceId, { file_id: fileId }),
+      api.slicesOfLife.journalsSlicesCoverUpdate(
+        String(vaultId),
+        Number(jId),
+        sliceId,
+        { file_id: fileId },
+      ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vaults", vaultId, "journals", jId, "slices"] });
+      queryClient.invalidateQueries({
+        queryKey: ["vaults", vaultId, "journals", jId, "slices"],
+      });
       setCoverModalOpen(false);
       setCoverSliceId(null);
       message.success(t("vault.journal_detail.cover_set"));
@@ -228,37 +309,48 @@ export default function JournalDetail() {
 
   const removeCoverMutation = useMutation({
     mutationFn: (sliceId: number) =>
-      api.slicesOfLife.journalsSlicesCoverDelete(String(vaultId), Number(jId), sliceId),
+      api.slicesOfLife.journalsSlicesCoverDelete(
+        String(vaultId),
+        Number(jId),
+        sliceId,
+      ),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["vaults", vaultId, "journals", jId, "slices"] });
+      queryClient.invalidateQueries({
+        queryKey: ["vaults", vaultId, "journals", jId, "slices"],
+      });
       message.success(t("vault.journal_detail.cover_removed"));
     },
     onError: (e: APIError) => message.error(e.message),
   });
 
   const createPostMutation = useMutation({
-    mutationFn: (values: { title: string; written_at: CalendarAwareDateValue }) =>
-      api.posts.journalsPostsCreate(String(vaultId), Number(jId), {
-        title: values.title,
-        written_at: values.written_at.date.toISOString(),
-        calendar_type: values.written_at.calendarType,
-        original_day: values.written_at.originalDay ?? undefined,
-        original_month: values.written_at.originalMonth ?? undefined,
-        original_year: values.written_at.originalYear ?? undefined,
-      }),
-    onSuccess: () => {
+    mutationFn: ({ payload }: CreatePostMutationVariables) =>
+      api.posts.journalsPostsCreate(String(vaultId), Number(jId), payload),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({
         queryKey: ["vaults", vaultId, "journals", jId, "posts"],
       });
+      message.success(t("vault.journal_detail.post_created"));
+      // A stale request can finish after a newer draft starts, so it must not reset that draft.
+      if (variables.revision !== postDraftRevisionRef.current) {
+        return;
+      }
+      advancePostDraftRevision();
       setOpen(false);
       form.resetFields();
-      message.success(t("vault.journal_detail.post_created"));
+      setPostBody("");
+      setUpdateLastContacted(false);
     },
     onError: (e: APIError) => message.error(e.message),
   });
 
   const deletePostMutation = useMutation({
-    mutationFn: (postId: number) => api.posts.journalsPostsDelete(String(vaultId), Number(jId), Number(postId)),
+    mutationFn: (postId: number) =>
+      api.posts.journalsPostsDelete(
+        String(vaultId),
+        Number(jId),
+        Number(postId),
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["vaults", vaultId, "journals", jId, "posts"],
@@ -280,7 +372,14 @@ export default function JournalDetail() {
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 24 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          marginBottom: 24,
+        }}
+      >
         <Button
           type="text"
           icon={<ArrowLeftOutlined />}
@@ -288,7 +387,9 @@ export default function JournalDetail() {
           style={{ color: token.colorTextSecondary }}
         />
         <BookOutlined style={{ fontSize: 20, color: token.colorPrimary }} />
-        <Title level={4} style={{ margin: 0, flex: 1 }}>{journal.name}</Title>
+        <Title level={4} style={{ margin: 0, flex: 1 }}>
+          {journal.name}
+        </Title>
       </div>
 
       <Card
@@ -305,8 +406,17 @@ export default function JournalDetail() {
         )}
       </Card>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <Title level={5} style={{ margin: 0 }}>{t("vault.journal_detail.metrics")}</Title>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 16,
+        }}
+      >
+        <Title level={5} style={{ margin: 0 }}>
+          {t("vault.journal_detail.metrics")}
+        </Title>
       </div>
 
       <Card
@@ -316,6 +426,12 @@ export default function JournalDetail() {
         }}
         bodyStyle={{ padding: 16 }}
       >
+        <Text
+          type="secondary"
+          style={{ display: "block", marginBottom: 12, fontSize: 12 }}
+        >
+          {t("vault.journal_detail.metric_help")}
+        </Text>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           {metrics.map((metric: JournalMetricResponse) => (
             <Tag
@@ -367,15 +483,27 @@ export default function JournalDetail() {
             </Tag>
           )}
           {!isAddingMetric && metrics.length === 0 && (
-            <Text type="secondary" style={{ fontSize: 13, fontStyle: "italic", marginLeft: 8 }}>
+            <Text
+              type="secondary"
+              style={{ fontSize: 13, fontStyle: "italic", marginLeft: 8 }}
+            >
               {t("vault.journal_detail.no_metrics")}
             </Text>
           )}
         </div>
       </Card>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <Title level={5} style={{ margin: 0 }}>{t("vault.journal_detail.slices")}</Title>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 16,
+        }}
+      >
+        <Title level={5} style={{ margin: 0 }}>
+          {t("vault.journal_detail.slices")}
+        </Title>
         <Button
           type="dashed"
           icon={<PlusOutlined />}
@@ -418,8 +546,16 @@ export default function JournalDetail() {
                         setCoverModalOpen(true);
                       }
                     }}
-                    title={slice.file_cover_image_id ? t("vault.journal_detail.remove_cover") : t("vault.journal_detail.set_cover")}
-                    style={slice.file_cover_image_id ? { color: token.colorPrimary } : undefined}
+                    title={
+                      slice.file_cover_image_id
+                        ? t("vault.journal_detail.remove_cover")
+                        : t("vault.journal_detail.set_cover")
+                    }
+                    style={
+                      slice.file_cover_image_id
+                        ? { color: token.colorPrimary }
+                        : undefined
+                    }
                   />,
                   <EditOutlined
                     key="edit"
@@ -441,7 +577,10 @@ export default function JournalDetail() {
                 <Card.Meta
                   title={slice.name}
                   description={
-                    <Text type="secondary" ellipsis={{ tooltip: slice.description }}>
+                    <Text
+                      type="secondary"
+                      ellipsis={{ tooltip: slice.description }}
+                    >
                       {slice.description ? (
                         <LinkifiedText>{slice.description}</LinkifiedText>
                       ) : (
@@ -456,11 +595,21 @@ export default function JournalDetail() {
         </Row>
       ) : (
         <Card style={{ marginBottom: 24, boxShadow: token.boxShadowTertiary }}>
-          <Empty description={t("vault.journal_detail.no_slices")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty
+            description={t("vault.journal_detail.no_slices")}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
         </Card>
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 16,
+        }}
+      >
         <Segmented
           value={activeSection}
           onChange={(v) => setActiveSection(v as string)}
@@ -470,7 +619,16 @@ export default function JournalDetail() {
           ]}
         />
         {activeSection === "posts" && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => {
+              advancePostDraftRevision();
+              setPostBody("");
+              setUpdateLastContacted(false);
+              setOpen(true);
+            }}
+          >
             {t("vault.journal_detail.new_post")}
           </Button>
         )}
@@ -486,7 +644,10 @@ export default function JournalDetail() {
                 onChange={(v) => setSelectedYear(v as string)}
                 options={[
                   { label: t("vault.journal_detail.all_years"), value: "all" },
-                  ...availableYears.map((y) => ({ label: String(y), value: String(y) })),
+                  ...availableYears.map((y) => ({
+                    label: String(y),
+                    value: String(y),
+                  })),
                 ]}
               />
             </div>
@@ -501,7 +662,14 @@ export default function JournalDetail() {
           >
             <List
               dataSource={posts}
-              locale={{ emptyText: <Empty description={t("vault.journal_detail.no_posts")} style={{ padding: 32 }} /> }}
+              locale={{
+                emptyText: (
+                  <Empty
+                    description={t("vault.journal_detail.no_posts")}
+                    style={{ padding: 32 }}
+                  />
+                ),
+              }}
               renderItem={(post: Post) => (
                 <List.Item
                   style={{
@@ -515,7 +683,10 @@ export default function JournalDetail() {
                     <Popconfirm
                       key="d"
                       title={t("vault.journal_detail.delete_post_confirm")}
-                       onConfirm={(e) => { e?.stopPropagation(); deletePostMutation.mutate(post.id!); }}
+                      onConfirm={(e) => {
+                        e?.stopPropagation();
+                        deletePostMutation.mutate(post.id!);
+                      }}
                     >
                       <Button
                         type="text"
@@ -526,7 +697,11 @@ export default function JournalDetail() {
                       />
                     </Popconfirm>,
                   ]}
-                  onClick={() => navigate(`/vaults/${vaultId}/journals/${jId}/posts/${post.id}`)}
+                  onClick={() =>
+                    navigate(
+                      `/vaults/${vaultId}/journals/${jId}/posts/${post.id}`,
+                    )
+                  }
                 >
                   <List.Item.Meta
                     title={
@@ -535,10 +710,22 @@ export default function JournalDetail() {
                       </Text>
                     }
                     description={
-                      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <CalendarOutlined style={{ fontSize: 12 }} />
-                        {formatDate(post.written_at, dateFormats)}
-                      </span>
+                      <Space direction="vertical" size={4}>
+                        <span
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 4,
+                          }}
+                        >
+                          <CalendarOutlined style={{ fontSize: 12 }} />
+                          {formatDate(post.written_at, dateFormats)}
+                        </span>
+                        <PostContactTags
+                          vaultId={vaultId}
+                          contacts={post.contacts ?? []}
+                        />
+                      </Space>
                     }
                   />
                 </List.Item>
@@ -564,7 +751,10 @@ export default function JournalDetail() {
                     width={120}
                     height={120}
                     src={`/api/vaults/${vaultId}/files/${photo.id}/download?token=${localStorage.getItem("token")}`}
-                    style={{ objectFit: "cover", borderRadius: token.borderRadius }}
+                    style={{
+                      objectFit: "cover",
+                      borderRadius: token.borderRadius,
+                    }}
                   />
                 ))}
               </div>
@@ -574,7 +764,9 @@ export default function JournalDetail() {
       )}
 
       <Modal
-        title={editingSlice ? t("common.edit") : t("vault.journal_detail.new_slice")}
+        title={
+          editingSlice ? t("common.edit") : t("vault.journal_detail.new_slice")
+        }
         open={sliceModalOpen}
         onCancel={() => {
           setSliceModalOpen(false);
@@ -582,7 +774,9 @@ export default function JournalDetail() {
           sliceForm.resetFields();
         }}
         onOk={() => sliceForm.submit()}
-        confirmLoading={createSliceMutation.isPending || updateSliceMutation.isPending}
+        confirmLoading={
+          createSliceMutation.isPending || updateSliceMutation.isPending
+        }
       >
         <Form
           form={sliceForm}
@@ -602,7 +796,10 @@ export default function JournalDetail() {
           >
             <Input />
           </Form.Item>
-          <Form.Item name="description" label={t("vault.journal_detail.slice_description")}>
+          <Form.Item
+            name="description"
+            label={t("vault.journal_detail.slice_description")}
+          >
             <Input.TextArea rows={3} />
           </Form.Item>
         </Form>
@@ -611,21 +808,94 @@ export default function JournalDetail() {
       <Modal
         title={t("vault.journal_detail.modal_title")}
         open={open}
-        onCancel={() => { setOpen(false); form.resetFields(); }}
+        onCancel={() => {
+          advancePostDraftRevision();
+          setOpen(false);
+          form.resetFields();
+          setPostBody("");
+          setUpdateLastContacted(false);
+        }}
         onOk={() => form.submit()}
         confirmLoading={createPostMutation.isPending}
+        width={860}
+        destroyOnHidden
       >
         <Form
           form={form}
           layout="vertical"
-          onFinish={(v) => createPostMutation.mutate(v)}
-          initialValues={{ written_at: buildCalendarAwareValue(dayjs(), "gregorian", null, null, null) }}
+          onValuesChange={advancePostDraftRevision}
+          onFinish={(values: CreatePostFormValues) =>
+            createPostMutation.mutate({
+              revision: postDraftRevisionRef.current,
+              payload: {
+                title: values.title,
+                written_at: values.written_at.date.toISOString(),
+                calendar_type: values.written_at.calendarType,
+                original_day: values.written_at.originalDay ?? undefined,
+                original_month: values.written_at.originalMonth ?? undefined,
+                original_year: values.written_at.originalYear ?? undefined,
+                sections: [
+                  {
+                    label: t("vault.journal_mentions.body_label"),
+                    content: postBody,
+                    content_format: "markdown",
+                    position: 0,
+                  },
+                ],
+                contact_ids: contactIdsFromMentions(postBody),
+                update_last_contacted: updateLastContacted,
+              },
+            })
+          }
+          initialValues={{
+            written_at: buildCalendarAwareValue(
+              dayjs(),
+              "gregorian",
+              null,
+              null,
+              null,
+            ),
+          }}
         >
-          <Form.Item name="title" label={t("vault.journal_detail.title_label")} rules={[{ required: true }]}>
+          <Form.Item
+            name="title"
+            label={t("vault.journal_detail.title_label")}
+            rules={[{ required: true }]}
+          >
             <Input />
           </Form.Item>
-          <Form.Item name="written_at" label={t("vault.journal_detail.date_label")} rules={[{ required: true }]}>
+          <Form.Item
+            name="written_at"
+            label={t("vault.journal_detail.date_label")}
+            rules={[{ required: true }]}
+          >
             <CalendarAwareDatePicker enableAlternativeCalendar={altCalendar} />
+          </Form.Item>
+          <Form.Item label={t("vault.journal_mentions.body_label")}>
+            {open && (
+              <MarkdownEditor
+                vaultId={vaultId}
+                value={postBody}
+                onChange={(value) => {
+                  advancePostDraftRevision();
+                  setPostBody(value);
+                }}
+                ariaLabel={t("vault.journal_mentions.body_label")}
+                placeholder={t("vault.journal_mentions.body_placeholder")}
+                variant="full"
+              />
+            )}
+          </Form.Item>
+          <Form.Item>
+            <Checkbox
+              checked={updateLastContacted}
+              onChange={(event) => {
+                advancePostDraftRevision();
+                setUpdateLastContacted(event.target.checked);
+              }}
+            >
+              {t("vault.journal_mentions.update_last_contacted")}
+            </Checkbox>
           </Form.Item>
         </Form>
       </Modal>
@@ -633,12 +903,18 @@ export default function JournalDetail() {
       <Modal
         title={t("vault.journal_detail.select_cover")}
         open={coverModalOpen}
-        onCancel={() => { setCoverModalOpen(false); setCoverSliceId(null); }}
+        onCancel={() => {
+          setCoverModalOpen(false);
+          setCoverSliceId(null);
+        }}
         footer={null}
         width={600}
       >
         {vaultFiles.length === 0 ? (
-          <Empty description={t("vault.files.no_files")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty
+            description={t("vault.files.no_files")}
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+          />
         ) : (
           <Row gutter={[8, 8]}>
             {vaultFiles.map((file: Photo) => (
@@ -650,18 +926,31 @@ export default function JournalDetail() {
                   styles={{ body: { padding: 4 } }}
                   onClick={() => {
                     if (coverSliceId !== null && file.id) {
-                      setCoverMutation.mutate({ sliceId: coverSliceId, fileId: file.id });
+                      setCoverMutation.mutate({
+                        sliceId: coverSliceId,
+                        fileId: file.id,
+                      });
                     }
                   }}
                 >
                   <img
                     alt={file.name}
                     src={`/api/vaults/${vaultId}/files/${file.id}/download?token=${localStorage.getItem("token")}`}
-                    style={{ width: "100%", height: 80, objectFit: "cover", borderRadius: 4 }}
+                    style={{
+                      width: "100%",
+                      height: 80,
+                      objectFit: "cover",
+                      borderRadius: 4,
+                    }}
                   />
                   <Text
                     ellipsis={{ tooltip: file.name }}
-                    style={{ fontSize: 11, display: "block", textAlign: "center", marginTop: 2 }}
+                    style={{
+                      fontSize: 11,
+                      display: "block",
+                      textAlign: "center",
+                      marginTop: 2,
+                    }}
                   >
                     {file.name}
                   </Text>

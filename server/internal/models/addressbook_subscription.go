@@ -9,12 +9,14 @@ import (
 
 type AddressBookSubscription struct {
 	ID                 string     `json:"id" gorm:"primaryKey;type:text"`
-	UserID             string     `json:"user_id" gorm:"type:text;not null;index"`
+	CreatedByUserID    string     `json:"created_by_user_id" gorm:"column:user_id;type:text;not null;index"`
 	VaultID            string     `json:"vault_id" gorm:"type:text;not null;index"`
 	URI                string     `json:"uri" gorm:"size:2096;not null"`
 	AddressBookPath    string     `json:"address_book_path" gorm:"size:2096"`
 	Username           string     `json:"username" gorm:"size:1024;not null"`
 	Password           string     `json:"-" gorm:"size:2048;not null"`
+	CustomCAPEM        string     `json:"custom_ca_pem" gorm:"type:text"`
+	SkipTLSVerify      bool       `json:"skip_tls_verify" gorm:"default:false"`
 	Active             bool       `json:"active" gorm:"default:true"`
 	SyncWay            uint8      `json:"sync_way" gorm:"default:2"`
 	Capabilities       string     `json:"capabilities" gorm:"size:2048;not null"`
@@ -27,7 +29,7 @@ type AddressBookSubscription struct {
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 
-	User      User       `json:"user,omitempty" gorm:"foreignKey:UserID"`
+	CreatedBy User       `json:"created_by,omitempty" gorm:"foreignKey:CreatedByUserID"`
 	Vault     Vault      `json:"vault,omitempty" gorm:"foreignKey:VaultID"`
 	SyncToken *SyncToken `json:"sync_token,omitempty" gorm:"foreignKey:SyncTokenID"`
 }

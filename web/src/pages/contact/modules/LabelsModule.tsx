@@ -18,6 +18,7 @@ import { useTranslation } from "react-i18next";
 import type { APIError } from "@/api";
 import { Link } from "react-router-dom";
 import { getReadableLabelTagColors } from "@/utils/labelColor";
+import { sortLabelsByName } from "@/utils/labelSort";
 
 const { Title, Text } = Typography;
 
@@ -27,7 +28,7 @@ interface LabelsModuleProps {
 }
 
 export default function LabelsModule({ vaultId, contactId }: LabelsModuleProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { message } = App.useApp();
   const queryClient = useQueryClient();
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -96,14 +97,19 @@ export default function LabelsModule({ vaultId, contactId }: LabelsModuleProps) 
     },
   });
 
-  const availableLabels = allLabels.filter(
+  const sortedAllLabels = sortLabelsByName(
+    allLabels,
+    i18n.resolvedLanguage ?? i18n.language,
+  );
+
+  const availableLabels = sortedAllLabels.filter(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (l: any) => !labels.some((cl: any) => cl.label_id === l.id)
   );
 
   const editAvailableLabels = editingLabel
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ? allLabels.filter((l: any) => l.id !== editingLabel.label_id && !labels.some((cl: any) => cl.label_id === l.id))
+    ? sortedAllLabels.filter((l: any) => l.id !== editingLabel.label_id && !labels.some((cl: any) => cl.label_id === l.id))
     : [];
 
   return (
@@ -177,7 +183,10 @@ export default function LabelsModule({ vaultId, contactId }: LabelsModuleProps) 
       <Modal
         title={t("contact.detail.labels.add")}
         open={isModalOpen}
-        onCancel={() => setIsModalOpen(false)}
+        onCancel={() => {
+          setIsModalOpen(false);
+          form.resetFields();
+        }}
         footer={null}
         destroyOnClose={true}
       >
@@ -212,7 +221,14 @@ export default function LabelsModule({ vaultId, contactId }: LabelsModuleProps) 
             </div>
           )}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-            <Button onClick={() => setIsModalOpen(false)}>{t("common.cancel")}</Button>
+            <Button
+              onClick={() => {
+                setIsModalOpen(false);
+                form.resetFields();
+              }}
+            >
+              {t("common.cancel")}
+            </Button>
             <Button 
               type="primary" 
               htmlType="submit" 

@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -12,6 +13,7 @@ import (
 	"github.com/naiba/bonds/internal/i18n"
 	"github.com/naiba/bonds/internal/middleware"
 	"github.com/naiba/bonds/internal/models"
+	userTimezone "github.com/naiba/bonds/internal/timezone"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -83,6 +85,7 @@ func (s *AuthService) sendVerificationEmail(user *models.User) {
 }
 
 func (s *AuthService) Register(req dto.RegisterRequest, locale string) (*dto.AuthResponse, error) {
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	// Check if registration is enabled (first user always allowed)
 	var userCount int64
 	s.db.Model(&models.User{}).Count(&userCount)
@@ -92,8 +95,10 @@ func (s *AuthService) Register(req dto.RegisterRequest, locale string) (*dto.Aut
 	}
 
 	var existing models.User
-	if err := s.db.Where("email = ?", req.Email).First(&existing).Error; err == nil {
+	if err := s.db.Where("LOWER(email) = ?", req.Email).First(&existing).Error; err == nil {
 		return nil, ErrEmailExists
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
 	}
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -102,12 +107,14 @@ func (s *AuthService) Register(req dto.RegisterRequest, locale string) (*dto.Aut
 	}
 
 	hashedStr := string(hashedPassword)
+	defaultTimezone := userTimezone.Default
 	account := models.Account{}
 	user := models.User{
 		FirstName:               &req.FirstName,
 		LastName:                &req.LastName,
 		Email:                   req.Email,
 		Password:                &hashedStr,
+		Timezone:                &defaultTimezone,
 		Locale:                  locale,
 		IsAccountAdministrator:  true,
 		IsInstanceAdministrator: isFirstUser,
@@ -119,6 +126,11 @@ func (s *AuthService) Register(req dto.RegisterRequest, locale string) (*dto.Aut
 		}
 		user.AccountID = account.ID
 		if err := tx.Create(&user).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&models.AccountMembership{
+			AccountID: account.ID, UserID: user.ID, IsAdmin: true,
+		}).Error; err != nil {
 			return err
 		}
 		return models.SeedAccountDefaults(tx, account.ID, user.ID, req.Email, locale)
@@ -148,7 +160,7 @@ func (s *AuthService) Register(req dto.RegisterRequest, locale string) (*dto.Aut
 
 func (s *AuthService) Login(req dto.LoginRequest) (*dto.AuthResponse, error) {
 	var user models.User
-	if err := s.db.Where("email = ?", req.Email).First(&user).Error; err != nil {
+	if err := s.db.Where("LOWER(email) = ?", strings.ToLower(strings.TrimSpace(req.Email))).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrInvalidCredentials
 		}
@@ -196,6 +208,7 @@ func (s *AuthService) generateTempAuthResponse(user *models.User) (*dto.AuthResp
 		Email:            user.Email,
 		IsAdmin:          user.IsAccountAdministrator,
 		IsInstanceAdmin:  user.IsInstanceAdministrator,
+		AuthVersion:      user.AuthVersion,
 		TwoFactorPending: true,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
@@ -227,7 +240,13 @@ func (s *AuthService) RefreshToken(claims *middleware.JWTClaims) (*dto.AuthRespo
 	if user.Disabled {
 		return nil, ErrUserDisabled
 	}
-	return s.generateAuthResponse(&user)
+	// WebAuthn login starts without an account-scoped JWT. Issue its initial
+	// session for the user's home account; explicit account switches still
+	// preserve their selected account in subsequent token refreshes.
+	if claims.AccountID == "" {
+		return s.generateAuthResponse(&user)
+	}
+	return s.generateAuthResponseForAccount(&user, claims.AccountID)
 }
 
 // VerifyTwoFactor validates a TOTP code against the temp_token issued during
@@ -315,13 +334,25 @@ func (s *AuthService) ResendVerification(userID string) error {
 }
 
 func (s *AuthService) generateAuthResponse(user *models.User) (*dto.AuthResponse, error) {
+	return s.generateAuthResponseForAccount(user, user.AccountID)
+}
+
+func (s *AuthService) generateAuthResponseForAccount(user *models.User, accountID string) (*dto.AuthResponse, error) {
+	var membership models.AccountMembership
+	if err := s.db.Where("account_id = ? AND user_id = ?", accountID, user.ID).First(&membership).Error; err != nil {
+		return nil, ErrUserNotFound
+	}
+	if accountID == user.AccountID {
+		membership.IsAdmin = user.IsAccountAdministrator
+	}
 	expiresAt := time.Now().Add(time.Duration(s.cfg.ExpiryHrs) * time.Hour)
 	claims := &middleware.JWTClaims{
 		UserID:          user.ID,
-		AccountID:       user.AccountID,
+		AccountID:       accountID,
 		Email:           user.Email,
-		IsAdmin:         user.IsAccountAdministrator,
+		IsAdmin:         membership.IsAdmin,
 		IsInstanceAdmin: user.IsInstanceAdministrator,
+		AuthVersion:     user.AuthVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -337,8 +368,38 @@ func (s *AuthService) generateAuthResponse(user *models.User) (*dto.AuthResponse
 	return &dto.AuthResponse{
 		Token:     tokenString,
 		ExpiresAt: expiresAt,
-		User:      *toUserResponse(user),
+		User:      *userResponseForAccount(user, accountID, membership.IsAdmin),
 	}, nil
+}
+
+func (s *AuthService) ListAccounts(userID string) ([]dto.AccountMembershipResponse, error) {
+	var user models.User
+	if err := s.db.Select("account_id, is_account_administrator").First(&user, "id = ?", userID).Error; err != nil {
+		return nil, ErrUserNotFound
+	}
+	var memberships []models.AccountMembership
+	if err := s.db.Where("user_id = ?", userID).Order("created_at ASC").Find(&memberships).Error; err != nil {
+		return nil, err
+	}
+	result := make([]dto.AccountMembershipResponse, 0, len(memberships))
+	for _, membership := range memberships {
+		admin := membership.IsAdmin
+		if membership.AccountID == user.AccountID {
+			admin = user.IsAccountAdministrator
+		}
+		result = append(result, dto.AccountMembershipResponse{
+			AccountID: membership.AccountID, IsAdmin: admin, IsHome: membership.AccountID == user.AccountID,
+		})
+	}
+	return result, nil
+}
+
+func (s *AuthService) SwitchAccount(userID, accountID string) (*dto.AuthResponse, error) {
+	var user models.User
+	if err := s.db.First(&user, "id = ?", userID).Error; err != nil {
+		return nil, ErrUserNotFound
+	}
+	return s.generateAuthResponseForAccount(&user, accountID)
 }
 
 func ptrToStr(s *string) string {
@@ -360,4 +421,11 @@ func toUserResponse(user *models.User) *dto.UserResponse {
 		EmailVerifiedAt:         user.EmailVerifiedAt,
 		CreatedAt:               user.CreatedAt,
 	}
+}
+
+func userResponseForAccount(user *models.User, accountID string, isAdmin bool) *dto.UserResponse {
+	resp := toUserResponse(user)
+	resp.AccountID = accountID
+	resp.IsAdmin = isAdmin
+	return resp
 }

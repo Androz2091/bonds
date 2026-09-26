@@ -6,9 +6,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/models"
+	userTimezone "github.com/naiba/bonds/internal/timezone"
 	"github.com/naiba/bonds/pkg/response"
 	"gorm.io/gorm"
 )
@@ -21,12 +23,108 @@ var (
 )
 
 type AdminService struct {
-	db        *gorm.DB
-	uploadDir string
+	db          *gorm.DB
+	uploadDir   string
+	credentials *CredentialActionService
 }
 
 func NewAdminService(db *gorm.DB, uploadDir string) *AdminService {
 	return &AdminService{db: db, uploadDir: uploadDir}
+}
+
+func (s *AdminService) SetCredentialActions(service *CredentialActionService) {
+	s.credentials = service
+}
+
+// CreateUser provisions a separate, private home account. The operator never
+// receives a password or gains access to the user's vaults. The new user
+// chooses their own password using a one-time email link.
+func (s *AdminService) CreateUser(req dto.AdminCreateUserRequest) (*dto.AdminUserResponse, error) {
+	if s.credentials == nil {
+		return nil, ErrMailerNotConfigured
+	}
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	var existing int64
+	if err := s.db.Model(&models.User{}).Where("LOWER(email) = ?", email).Count(&existing).Error; err != nil {
+		return nil, err
+	}
+	if existing != 0 {
+		return nil, ErrEmailExists
+	}
+	var user models.User
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		account := models.Account{}
+		if err := tx.Create(&account).Error; err != nil {
+			return err
+		}
+		tz := userTimezone.Default
+		user = models.User{AccountID: account.ID, Email: email, FirstName: strPtrOrNil(req.FirstName),
+			LastName: strPtrOrNil(req.LastName), Timezone: &tz, Locale: "en", IsAccountAdministrator: true}
+		if err := tx.Create(&user).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&models.AccountMembership{AccountID: account.ID, UserID: user.ID, IsAdmin: true}).Error; err != nil {
+			return err
+		}
+		if err := models.SeedAccountDefaults(tx, account.ID, user.ID, email, "en"); err != nil {
+			return err
+		}
+		return s.credentials.Send(tx, &user, "password_setup")
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := s.toAdminUserResponse(user)
+	return &result, nil
+}
+
+func (s *AdminService) SendPasswordReset(targetID string) error {
+	if s.credentials == nil {
+		return ErrMailerNotConfigured
+	}
+	var user models.User
+	if err := s.db.First(&user, "id = ?", targetID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrAdminUserNotFound
+		}
+		return err
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		return s.credentials.Send(tx, &user, "password_reset")
+	})
+}
+
+func (s *AdminService) UpdateIdentity(targetID string, req dto.AdminUpdateIdentityRequest) (*dto.AdminUserResponse, error) {
+	var user models.User
+	if err := s.db.First(&user, "id = ?", targetID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrAdminUserNotFound
+		}
+		return nil, err
+	}
+	if err := s.db.Model(&user).Updates(map[string]interface{}{"first_name": strings.TrimSpace(req.FirstName), "last_name": strings.TrimSpace(req.LastName)}).Error; err != nil {
+		return nil, err
+	}
+	result := s.toAdminUserResponse(user)
+	result.FirstName = strings.TrimSpace(req.FirstName)
+	result.LastName = strings.TrimSpace(req.LastName)
+	return &result, nil
+}
+
+func (s *AdminService) RequestEmailChange(targetID, email string) error {
+	if s.credentials == nil {
+		return ErrMailerNotConfigured
+	}
+	var user models.User
+	if err := s.db.First(&user, "id = ?", targetID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrAdminUserNotFound
+		}
+		return err
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		return s.credentials.RequestEmailChange(tx, &user, email)
+	})
 }
 
 func (s *AdminService) ListUsers(page, perPage int) ([]dto.AdminUserResponse, response.Meta, error) {
@@ -62,27 +160,46 @@ func (s *AdminService) ListUsers(page, perPage int) ([]dto.AdminUserResponse, re
 	return result, meta, nil
 }
 
-// adminContactCountSQL counts contacts per account, excluding UserVault shadow
-// contacts (can_be_deleted=false AND listed=false). Parameters: account_id,
-// can_be_deleted, listed.
-func adminContactCountSQL() string {
-	return `
-		SELECT COUNT(DISTINCT c.id)
-		FROM contacts c
-		INNER JOIN vaults v ON c.vault_id = v.id
-		WHERE v.account_id = ?
-		AND NOT (c.can_be_deleted = ? AND c.listed = ?)`
+func (s *AdminService) ListAudit(page, perPage int) ([]dto.AuditEventResponse, response.Meta, error) {
+	return s.listAudit(nil, page, perPage)
+}
+
+func (s *AdminService) ListVaultAudit(vaultID string, page, perPage int) ([]dto.AuditEventResponse, response.Meta, error) {
+	return s.listAudit(&vaultID, page, perPage)
+}
+
+func (s *AdminService) listAudit(vaultID *string, page, perPage int) ([]dto.AuditEventResponse, response.Meta, error) {
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 || perPage > 100 {
+		perPage = 25
+	}
+	var total int64
+	query := s.db.Model(&models.AuditEvent{})
+	if vaultID == nil {
+		query = query.Where("vault_id IS NULL")
+	} else {
+		query = query.Where("vault_id = ?", *vaultID)
+	}
+	if err := query.Count(&total).Error; err != nil {
+		return nil, response.Meta{}, err
+	}
+	var rows []models.AuditEvent
+	if err := query.Order("id DESC").Limit(perPage).Offset((page - 1) * perPage).Find(&rows).Error; err != nil {
+		return nil, response.Meta{}, err
+	}
+	result := make([]dto.AuditEventResponse, len(rows))
+	for i, row := range rows {
+		result[i] = dto.AuditEventResponse{ID: row.ID, ActorUserID: row.ActorUserID,
+			AccountID: row.AccountID, VaultID: row.VaultID, Method: row.Method, Route: row.Route,
+			Status: row.Status, RequestID: row.RequestID, CreatedAt: row.CreatedAt}
+	}
+	return result, response.Meta{Page: page, PerPage: perPage, Total: total,
+		TotalPages: int(math.Ceil(float64(total) / float64(perPage)))}, nil
 }
 
 func (s *AdminService) toAdminUserResponse(u models.User) dto.AdminUserResponse {
-	var contactCount int64
-	s.db.Raw(adminContactCountSQL(), u.AccountID, false, false).Scan(&contactCount)
-
-	var vaultCount int64
-	s.db.Model(&models.Vault{}).Where("account_id = ?", u.AccountID).Count(&vaultCount)
-
-	storageUsed := s.calculateStorageUsed(u.AccountID)
-
 	var account models.Account
 	s.db.First(&account, "id = ?", u.AccountID)
 
@@ -95,26 +212,9 @@ func (s *AdminService) toAdminUserResponse(u models.User) dto.AdminUserResponse 
 		IsAccountAdministrator:  u.IsAccountAdministrator,
 		IsInstanceAdministrator: u.IsInstanceAdministrator,
 		Disabled:                u.Disabled,
-		ContactCount:            contactCount,
-		StorageUsed:             storageUsed,
 		StorageLimitInMB:        account.StorageLimitInMB,
-		VaultCount:              vaultCount,
 		CreatedAt:               u.CreatedAt,
 	}
-}
-
-func (s *AdminService) calculateStorageUsed(accountID string) int64 {
-	var files []models.File
-	s.db.Joins("INNER JOIN vaults ON files.vault_id = vaults.id").
-		Where("vaults.account_id = ?", accountID).
-		Select("files.uuid, files.size").
-		Find(&files)
-
-	var totalSize int64
-	for _, f := range files {
-		totalSize += int64(f.Size)
-	}
-	return totalSize
 }
 
 func (s *AdminService) ToggleUser(actorID, targetID string, disabled bool) error {
@@ -130,7 +230,15 @@ func (s *AdminService) ToggleUser(actorID, targetID string, disabled bool) error
 		return err
 	}
 
-	return s.db.Model(&user).Update("disabled", disabled).Error
+	if !disabled {
+		return s.db.Model(&user).Update("disabled", false).Error
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := ensureUserIsNotSoleVaultManager(tx, user.ID); err != nil {
+			return err
+		}
+		return tx.Model(&user).Update("disabled", true).Error
+	})
 }
 
 func (s *AdminService) SetAdmin(actorID, targetID string, isAdmin bool) error {
@@ -173,9 +281,10 @@ func (s *AdminService) DeleteUser(actorID, targetID string) error {
 		return err
 	}
 
-	// Count how many users share this account (invitation system allows multiple users per account).
+	// Memberships, not home-account IDs, are authoritative. Other users may
+	// have joined this account without changing their original home account.
 	var accountUserCount int64
-	if err := s.db.Model(&models.User{}).Where("account_id = ?", user.AccountID).Count(&accountUserCount).Error; err != nil {
+	if err := s.db.Model(&models.AccountMembership{}).Where("account_id = ?", user.AccountID).Count(&accountUserCount).Error; err != nil {
 		return err
 	}
 
@@ -190,12 +299,17 @@ func (s *AdminService) DeleteUser(actorID, targetID string) error {
 
 // deleteEntireAccount removes the user, the account, and all associated data (vaults, contacts, files, etc.).
 func (s *AdminService) deleteEntireAccount(user models.User) error {
-	// Delete physical files BEFORE the transaction to avoid SQLite lock contention.
-	if err := s.deleteUserFiles(user.AccountID); err != nil {
-		return fmt.Errorf("delete user files: %w", err)
-	}
+	var fileUUIDs []string
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Collect physical file paths while the rows still exist; the files
+		// themselves are removed only after the transaction commits.
+		if err := tx.Model(&models.File{}).
+			Joins("INNER JOIN vaults ON files.vault_id = vaults.id").
+			Where("vaults.account_id = ?", user.AccountID).
+			Pluck("uuid", &fileUUIDs).Error; err != nil {
+			return fmt.Errorf("collect user files: %w", err)
+		}
 
-	return s.db.Transaction(func(tx *gorm.DB) error {
 		var vaults []models.Vault
 		if err := tx.Where("account_id = ?", user.AccountID).Find(&vaults).Error; err != nil {
 			return err
@@ -205,15 +319,6 @@ func (s *AdminService) deleteEntireAccount(user models.User) error {
 			if err := s.deleteVaultData(tx, v.ID); err != nil {
 				return fmt.Errorf("delete vault %s data: %w", v.ID, err)
 			}
-		}
-
-		templateSubquery := tx.Model(&models.Template{}).Select("id").Where("account_id = ?", user.AccountID)
-		templatePageSubquery := tx.Model(&models.TemplatePage{}).Select("id").Where("template_id IN (?)", templateSubquery)
-		if err := tx.Where("template_page_id IN (?)", templatePageSubquery).Delete(&models.ModuleTemplatePage{}).Error; err != nil {
-			return fmt.Errorf("delete module template pages: %w", err)
-		}
-		if err := tx.Where("template_id IN (?)", templateSubquery).Delete(&models.TemplatePage{}).Error; err != nil {
-			return fmt.Errorf("delete template pages: %w", err)
 		}
 
 		groupTypeSubquery := tx.Model(&models.GroupType{}).Select("id").Where("account_id = ?", user.AccountID)
@@ -231,8 +336,14 @@ func (s *AdminService) deleteEntireAccount(user models.User) error {
 			return fmt.Errorf("delete call reasons: %w", err)
 		}
 
+		postTemplateSubquery := tx.Model(&models.PostTemplate{}).Select("id").Where("account_id = ?", user.AccountID)
+		if err := tx.Where("post_template_id IN (?)", postTemplateSubquery).Delete(&models.PostTemplateSection{}).Error; err != nil {
+			return fmt.Errorf("delete post template sections: %w", err)
+		}
+
 		accountTables := []interface{}{
 			&models.Invitation{},
+			&models.AccountMembership{},
 			&models.AccountCurrency{},
 			&models.TaskStatus{},
 			&models.Gender{},
@@ -247,8 +358,6 @@ func (s *AdminService) deleteEntireAccount(user models.User) error {
 			&models.GiftOccasion{},
 			&models.GiftState{},
 			&models.PostTemplate{},
-			&models.Template{},
-			&models.Module{},
 			&models.GroupType{},
 			&models.SyncToken{},
 		}
@@ -271,14 +380,27 @@ func (s *AdminService) deleteEntireAccount(user models.User) error {
 			return err
 		}
 
-		return tx.Where("id = ?", user.AccountID).Delete(&models.Account{}).Error
+		if err := tx.Where("id = ?", user.AccountID).Delete(&models.Account{}).Error; err != nil {
+			return err
+		}
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Delete physical files only after the transaction commits: a rollback must
+	// not leave the account without the files it still references.
+	return s.removeFiles(fileUUIDs)
 }
 
 // deleteUserOnly removes only the user record and their personal data (notification channels,
 // WebAuthn credentials, etc.) without touching the shared account, vaults, or contacts.
 func (s *AdminService) deleteUserOnly(user models.User) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := ensureUserIsNotSoleVaultManager(tx, user.ID); err != nil {
+			return err
+		}
 		if err := s.deleteUserDirectData(tx, user.ID); err != nil {
 			return err
 		}
@@ -294,6 +416,10 @@ func (s *AdminService) deleteUserDirectData(tx *gorm.DB, userID string) error {
 	}
 
 	userTables := []interface{}{
+		&models.AccountMembership{},
+		&models.AuthActionToken{},
+		&models.PersonalAccessToken{},
+		&models.MoodTrackingEvent{},
 		&models.UserNotificationChannel{},
 		&models.UserToken{},
 		&models.WebAuthnCredential{},
@@ -308,6 +434,17 @@ func (s *AdminService) deleteUserDirectData(tx *gorm.DB, userID string) error {
 }
 
 func (s *AdminService) deleteVaultData(tx *gorm.DB, vaultID string) error {
+	contactTemplateSubquery := tx.Model(&models.VaultContactTemplate{}).Select("id").Where("vault_id = ?", vaultID)
+	contactPageSubquery := tx.Model(&models.VaultContactTemplatePage{}).Select("id").Where("template_id IN (?)", contactTemplateSubquery)
+	if err := tx.Where("template_page_id IN (?)", contactPageSubquery).Delete(&models.VaultContactTemplateModule{}).Error; err != nil {
+		return fmt.Errorf("delete vault contact template modules: %w", err)
+	}
+	if err := tx.Where("template_id IN (?)", contactTemplateSubquery).Delete(&models.VaultContactTemplatePage{}).Error; err != nil {
+		return fmt.Errorf("delete vault contact template pages: %w", err)
+	}
+	if err := tx.Where("vault_id = ?", vaultID).Delete(&models.VaultContactTemplate{}).Error; err != nil {
+		return fmt.Errorf("delete vault contact templates: %w", err)
+	}
 	var contacts []models.Contact
 	if err := tx.Where("vault_id = ?", vaultID).Find(&contacts).Error; err != nil {
 		return err
@@ -325,6 +462,9 @@ func (s *AdminService) deleteVaultData(tx *gorm.DB, vaultID string) error {
 
 	journalSubquery := tx.Model(&models.Journal{}).Select("id").Where("vault_id = ?", vaultID)
 	postSubquery := tx.Model(&models.Post{}).Select("id").Where("journal_id IN (?)", journalSubquery)
+	if err := tx.Where("vault_id = ?", vaultID).Delete(&models.ContentFileReference{}).Error; err != nil {
+		return fmt.Errorf("delete content file references: %w", err)
+	}
 
 	for _, model := range []interface{}{&models.PostSection{}, &models.PostMetric{}, &models.PostTag{}} {
 		if err := tx.Where("post_id IN (?)", postSubquery).Delete(model).Error; err != nil {
@@ -341,21 +481,17 @@ func (s *AdminService) deleteVaultData(tx *gorm.DB, vaultID string) error {
 		return fmt.Errorf("delete journal metrics: %w", err)
 	}
 
-	timelineSubquery := tx.Model(&models.TimelineEvent{}).Select("id").Where("vault_id = ?", vaultID)
-	lifeEventSubquery := tx.Model(&models.LifeEvent{}).Select("id").Where("timeline_event_id IN (?)", timelineSubquery)
-	if err := tx.Where("timeline_event_id IN (?)", timelineSubquery).Delete(&models.TimelineEventParticipant{}).Error; err != nil {
-		return fmt.Errorf("delete timeline event participants: %w", err)
+	activitySubquery := tx.Model(&models.Activity{}).Select("id").Where("vault_id = ?", vaultID)
+	if err := tx.Where("activity_id IN (?)", activitySubquery).Delete(&models.ActivityParticipant{}).Error; err != nil {
+		return fmt.Errorf("delete activity participants: %w", err)
 	}
-	if err := tx.Where("life_event_id IN (?)", lifeEventSubquery).Delete(&models.LifeEventParticipant{}).Error; err != nil {
-		return fmt.Errorf("delete life event participants: %w", err)
-	}
-	if err := tx.Where("timeline_event_id IN (?)", timelineSubquery).Delete(&models.LifeEvent{}).Error; err != nil {
-		return fmt.Errorf("delete life events: %w", err)
+	if err := tx.Where("vault_id = ?", vaultID).Delete(&models.Activity{}).Error; err != nil {
+		return fmt.Errorf("delete activities: %w", err)
 	}
 
-	lifeCategorySubquery := tx.Model(&models.LifeEventCategory{}).Select("id").Where("vault_id = ?", vaultID)
-	if err := tx.Where("life_event_category_id IN (?)", lifeCategorySubquery).Delete(&models.LifeEventType{}).Error; err != nil {
-		return fmt.Errorf("delete life event types: %w", err)
+	lifeCategorySubquery := tx.Model(&models.ActivityCategory{}).Select("id").Where("vault_id = ?", vaultID)
+	if err := tx.Where("activity_category_id IN (?)", lifeCategorySubquery).Delete(&models.ActivityType{}).Error; err != nil {
+		return fmt.Errorf("delete activity types: %w", err)
 	}
 
 	abSubquery := tx.Model(&models.AddressBookSubscription{}).Select("id").Where("vault_id = ?", vaultID)
@@ -367,6 +503,7 @@ func (s *AdminService) deleteVaultData(tx *gorm.DB, vaultID string) error {
 	}
 
 	vaultTables := []interface{}{
+		&models.MoodTrackingEvent{},
 		&models.UserVault{},
 		&models.ContactVaultUser{},
 		&models.File{},
@@ -374,7 +511,7 @@ func (s *AdminService) deleteVaultData(tx *gorm.DB, vaultID string) error {
 		&models.Tag{},
 		&models.ContactImportantDateType{},
 		&models.MoodTrackingParameter{},
-		&models.LifeEventCategory{},
+		&models.ActivityCategory{},
 		&models.VaultQuickFactsTemplate{},
 		&models.Group{},
 		&models.Journal{},
@@ -383,7 +520,6 @@ func (s *AdminService) deleteVaultData(tx *gorm.DB, vaultID string) error {
 		&models.Address{},
 		&models.Loan{},
 		&models.ContactTask{},
-		&models.TimelineEvent{},
 		&models.LifeMetric{},
 	}
 
@@ -397,12 +533,27 @@ func (s *AdminService) deleteVaultData(tx *gorm.DB, vaultID string) error {
 }
 
 func (s *AdminService) deleteContactData(tx *gorm.DB, contactID string) error {
+	var noteIDs []uint
+	if err := tx.Model(&models.Note{}).Where("contact_id = ?", contactID).Pluck("id", &noteIDs).Error; err != nil {
+		return fmt.Errorf("collect note IDs: %w", err)
+	}
+	if len(noteIDs) > 0 {
+		if err := tx.Where("owner_type = ? AND owner_id IN ?", models.ContentOwnerNote, noteIDs).
+			Delete(&models.ContentFileReference{}).Error; err != nil {
+			return fmt.Errorf("delete note file references: %w", err)
+		}
+	}
+	// Reminder schedules and selected recipients depend on ContactReminder.
 	if err := tx.Where("contact_reminder_id IN (?)",
 		tx.Model(&models.ContactReminder{}).Select("id").Where("contact_id = ?", contactID),
 	).Delete(&models.ContactReminderScheduled{}).Error; err != nil {
 		return fmt.Errorf("delete scheduled reminders: %w", err)
 	}
-
+	if err := tx.Where("contact_reminder_id IN (?)",
+		tx.Model(&models.ContactReminder{}).Select("id").Where("contact_id = ?", contactID),
+	).Delete(&models.ContactReminderSelectedUser{}).Error; err != nil {
+		return fmt.Errorf("delete selected reminder recipients: %w", err)
+	}
 	goalSubquery := tx.Model(&models.Goal{}).Select("id").Where("contact_id = ?", contactID)
 	if err := tx.Where("goal_id IN (?)", goalSubquery).Delete(&models.Streak{}).Error; err != nil {
 		return fmt.Errorf("delete streaks: %w", err)
@@ -420,7 +571,6 @@ func (s *AdminService) deleteContactData(tx *gorm.DB, contactID string) error {
 		&models.Pet{},
 		&models.Relationship{},
 		&models.Goal{},
-		&models.MoodTrackingEvent{},
 		&models.ContactGroup{},
 		&models.ContactLabel{},
 		&models.QuickFact{},
@@ -451,14 +601,9 @@ func (s *AdminService) deleteContactData(tx *gorm.DB, contactID string) error {
 	return nil
 }
 
-func (s *AdminService) deleteUserFiles(accountID string) error {
-	var files []models.File
-	s.db.Joins("INNER JOIN vaults ON files.vault_id = vaults.id").
-		Where("vaults.account_id = ?", accountID).
-		Find(&files)
-
-	for _, f := range files {
-		filePath := filepath.Join(s.uploadDir, f.UUID)
+func (s *AdminService) removeFiles(fileUUIDs []string) error {
+	for _, uuid := range fileUUIDs {
+		filePath := filepath.Join(s.uploadDir, uuid)
 		os.Remove(filePath)
 	}
 	return nil

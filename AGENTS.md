@@ -152,23 +152,24 @@ docker-compose.yml         # 单容器部署
 - RelationshipGroupType（4 组 17 种关系类型）
 - CallReasonType（2 类 7 条原因）、Religion（9）、GroupType（5 + roles）
 - Emotion（3）、GiftOccasion（5）、GiftState（5）、PostTemplate（2）
-- Template（1 默认模板 + 5 TemplatePage）
+- Template（1 默认模板 + 8 TemplatePage）
 - Module（24 个默认模块） + ModuleTemplatePage（模块绑定到模板页的 pivot）
 - UserNotificationChannel（用户 email 通知）
 - AccountCurrency（关联所有货币到账户）
 
 **默认模板页 → 模块映射**（`seedDefaultModules`）：
-- "Contact information" (slug: `contact`) → avatar, contact_names, family_summary, important_dates, gender_pronoun, labels, company, religions
+- "Contact information" (slug: `contact`) → avatar, contact_names, family_summary, important_dates, gender_pronoun, labels, quick_facts, company, religions, addresses, contact_information
 - "Feed" (slug: `feed`) → feed
-- "Social" (slug: `social`) → relationships, pets, groups, addresses, contact_information
-- "Life & goals" (slug: `life-goals`) → life_events, goals
-  - 注意：`mood_tracking` 模块已从 Contact Detail 移除，Mood Tracking 仅在 Vault Dashboard 右侧栏展示（交互式录入，通过 `user_contact_id` 关联到用户影子联系人）
+- "Social" (slug: `social`) → relationships, pets, groups
+- "Activities" (slug: `activities`) → activities
+- "Goals" (slug: `goals`) → goals
+  - 注意：`mood_tracking` 模块已从 Contact Detail 移除，Mood Tracking 仅在 Vault Dashboard 右侧栏展示（通过 `vault_id + user_id` 关联到当前系统用户）
 - "Information" (slug: `information`) → documents, photos, notes, reminders, loans, tasks, calls, posts
 
 **Vault 级种子**（`seed_vault.go`）— 创建 Vault 时在事务内调用 `SeedVaultDefaults(tx, vaultID)`：
 - ContactImportantDateType（2：Birthdate、Deceased date，不可删除）
 - MoodTrackingParameter（5 级，带 emoji + Tailwind 颜色）
-- LifeEventCategory（4 类 20 种事件类型）
+- ActivityCategory（4 类 20 种事件类型）
 - VaultQuickFactsTemplate（3：How we met、Hobbies、Food preferences）
 
 ### Vault Dashboard 布局
@@ -176,11 +177,11 @@ docker-compose.yml         # 单容器部署
 仿照 Monica v5 的 3 列 + 3 Tab 布局：
 - **左栏**（240px）：Recent Contacts + Most Consulted
 - **中栏**（fluid）：Ant Design `Segmented` 切换 3 个 Tab
-  - Activity（vault feed）
-  - Your Life Events（`GET /api/vaults/:id/dashboard/lifeEvents`）
+  - Feed（vault feed）
+  - Activities（`GET /api/vaults/:id/activities`，展示整个 Vault 的事件）
   - Life Metrics（+1 increment pattern）
-- **右栏**（320px）：Mood Recording（交互式录入，通过 `user_contact_id` 关联） + Upcoming Reminders + Due Tasks
-- Tab 状态通过 `PUT /api/vaults/:id/defaultTab` 持久化到 `Vault.DefaultActivityTab` 字段
+- **右栏**（320px）：Mood Recording（交互式录入，通过 `vault_id + user_id` 关联） + Upcoming Reminders + Due Tasks
+- Tab 状态通过 `PUT /api/vaults/:id/default-dashboard-tab` 持久化到 `Vault.DefaultDashboardTab` 字段
 - 响应式：≥1024px 三栏，768-1023px 两栏（隐藏左栏），<768px 单栏
 
 ### Life Metrics 架构（Issue #63 重构）
@@ -194,27 +195,14 @@ docker-compose.yml         # 单容器部署
 - 前端 Life Metrics 独立页面（`/vaults/:id/life-metrics`）保留但已从导航移除
 - Feed 独立页面（`/vaults/:id/feed`）同上
 
-### UserVault.ContactID — 用户影子联系人（Monica v5 模式）
+### Vault 用户与联系人解耦
 
-复刻 Monica v5 的 `user_vault.contact_id` 架构：每个用户在每个 vault 中拥有一个"影子联系人"（shadow contact），用于记录个人心情和生活事件。
-
-**自动创建时机：**
-- `CreateVault`：在事务内为创建者自动创建影子 Contact，设置 `UserVault.ContactID`
-- `Accept`（邀请接受）：受邀用户加入账户下所有 vault，每个 vault 自动创建影子 Contact
-
-**影子 Contact 特征：**
-- `Listed=false`：不出现在联系人列表、搜索结果
-- `CanBeDeleted=false`：不可删除
-- GORM 零值 bool 陷阱：必须先 `Create` 再 `Update("can_be_deleted", false)` 和 `Update("listed", false)`
-- 从以下查询中排除：`ListContacts`、`Overview`（报表）、`ExportVault`（vCard 导出）、`ListAddressObjects`（CardDAV）、Admin 用户统计
-
-**API 暴露：**
-- `VaultResponse.user_contact_id`：当前用户在该 vault 的影子 Contact ID
-- 前端通过此 ID 调用 mood tracking 和 life events API
-
-**辅助函数（`services/vault.go`）：**
-- `createUserSelfContact(tx, vaultID, firstName, lastName)` — 创建影子 Contact 并返回 ID
-- `getUserContactID(db, userID, vaultID)` — 查询 UserVault.ContactID
+- 系统用户仅通过 `UserVault` 表示 Vault 成员关系和权限；`UserVault` 不关联 `Contact`。
+- 创建 Vault 或接受邀请不会自动创建联系人。
+- Mood Tracking 通过 `MoodTrackingEvent.VaultID + UserID` 记录当前系统用户；升级前无法映射到用户的普通联系人心情保留为 `UserID=NULL` 的 Vault 历史。
+- Vault Dashboard 创建的 Activity 使用 `SubjectUserID + SubjectUserName` 记录系统用户主体，可有零个或多个普通联系人参与者。
+- Contact Detail 创建的 Activity 通过 `activity_participants` 关联普通联系人。
+- “其他参与者”选择器只展示联系人，不混入 Vault 系统用户。
 
 ### 个性化设置（Personalize）
 
@@ -278,7 +266,7 @@ React 19、TypeScript 严格模式、Vite 7、Ant Design v6、TanStack Query v5�
 
 ### E2E（Playwright）
 
-- 测试用例在 `web/e2e/` — `admin.spec.ts`、`auth.spec.ts`、`calendar.spec.ts`、`company-employees-and-life-metrics.spec.ts`、`contact.spec.ts`、`contact-avatar.spec.ts`、`contact-filter.spec.ts`、`contact-modules.spec.ts`、`contact-move-vault.spec.ts`、`contact-social-and-operations.spec.ts`、`contact-summary.spec.ts`、`dav-subscriptions.spec.ts`、`groups.spec.ts`、`life-events.spec.ts`、`pagination.spec.ts`、`quick-facts.spec.ts`、`relationship-types-and-directions.spec.ts`、`search.spec.ts`、`settings.spec.ts`、`settings-webauthn-personalize.spec.ts`、`vault.spec.ts`、`vault-companies.spec.ts`、`vault-features-journal-reports.spec.ts`、`vault-files.spec.ts`。
+- 测试用例在 `web/e2e/` — `admin.spec.ts`、`auth.spec.ts`、`calendar.spec.ts`、`company-employees-and-life-metrics.spec.ts`、`contact.spec.ts`、`contact-avatar.spec.ts`、`contact-filter.spec.ts`、`contact-modules.spec.ts`、`contact-move-vault.spec.ts`、`contact-social-and-operations.spec.ts`、`contact-summary.spec.ts`、`dav-subscriptions.spec.ts`、`groups.spec.ts`、`activities.spec.ts`、`pagination.spec.ts`、`quick-facts.spec.ts`、`relationship-types-and-directions.spec.ts`、`search.spec.ts`、`settings.spec.ts`、`settings-webauthn-personalize.spec.ts`、`vault.spec.ts`、`vault-companies.spec.ts`、`vault-features-journal-reports.spec.ts`、`vault-files.spec.ts`。
 - Playwright 自动启动 Go 服务器（端口 8080）和 Vite 开发服务器（端口 5173）。
 - Ant Design 表单：使用 `page.getByPlaceholder(...)` 而非 `getByLabel(...)`。
 - **E2E 自动清理旧 DB**：`playwright.config.ts` 的 `webServer.command` 会在启动 Go 服务器前自动删除 `server/bonds.db*`。CI 环境下始终生效；本地 `reuseExistingServer=true` 时跳过（复用已运行的服务器）。
@@ -350,7 +338,7 @@ React 19、TypeScript 严格模式、Vite 7、Ant Design v6、TanStack Query v5�
 ### 敏感设置静态加密（SETTINGS_ENC_KEY）
 
 - `pkg/secret`：AES-256-GCM cipher，前缀 `enc:v1:` 标识密文，密文行格式 `enc:v1:hex(nonce|ciphertext)`
-- 受保护字段：`system_settings.value` 中 `smtp.password`、`geocoding.api_key`，以及 `oauth_providers.client_secret`
+- 受保护字段：`system_settings.value` 中的 `smtp.password`、`geocoding_provider_configs.config`，以及 `oauth_providers.client_secret`
 - 启用方式：设置环境变量 `SETTINGS_ENC_KEY`（任意长度，内部 SHA-256 拉伸到 32 字节）。未设置时全部走明文（向后兼容）
 - 启动时自动迁移：`MigratePlaintextSecrets` 在 `routes.go` 中调用一次，把已有明文行加密回写。幂等
 - Admin API（`GET/PUT /api/admin/settings`）改用 `GetAllRedacted`，敏感键以 `***` 返回；写入时 `***` 视为"保留原值"，UI 可直接 round-trip 编辑非敏感字段不会清空密钥
@@ -378,7 +366,7 @@ React 19、TypeScript 严格模式、Vite 7、Ant Design v6、TanStack Query v5�
 - 入口：`POST /api/vaults/:vault_id/settings/import/monica`（multipart form upload，仅 Manager 权限）
 - 前端：Vault Settings → "Monica Import" tab
 - 服务：`services.MonicaImportService` — 解析 Monica 4.x JSON 导出（`version: 1.0-preview.1`）
-- 映射：Contact/Label/Gender/ImportantDate/Note/Call/Task/Reminder/Address/ContactInformation/Pet/Gift/Loan/LifeEvent/Relationship/Photo/Document
+- 映射：Contact/Label/Gender/ImportantDate/Note/Call/Task/Reminder/Address/ContactInformation/Pet/Gift/Loan/Activity/Relationship/Photo/Document
 - 降级：Activity → Note（带类型前缀），Conversation → Note（聊天记录格式）
 - 去重：通过 `Contact.DistantUUID` 存储 Monica UUID，重复导入自动跳过
 - 文件：base64 解码后存储到 UploadDir，第一张照片设为联系人头像
@@ -412,7 +400,7 @@ React 19、TypeScript 严格模式、Vite 7、Ant Design v6、TanStack Query v5�
 
 - `Geocoder` 接口 + `NominatimGeocoder`（免费 OSM）+ `LocationIQGeocoder`（API key）
 - 地址创建时异步编码，失败不影响主流程
-- 配置：`GEOCODING_PROVIDER`（nominatim/locationiq）、`GEOCODING_API_KEY`
+- 配置：`GEOCODING_PROVIDER` 与 `GEOCODING_PRECISION` 作为初始设置；各 Provider 的结构化配置在管理后台维护
 
 ### 审计日志（Feed）
 
@@ -565,5 +553,5 @@ defer cleanup()
 - 联系人创建后会自动跳转到详情页，测试中应先 `await expect(page).toHaveURL(/\/contacts\/[a-f0-9-]+$/)` 等待导航完成，再断言页面内容。
 - **Ant Design Select 下拉遮挡**：多个 Select 紧挨时，前一个 Select 的 dropdown 可能遮挡后一个。选完后点击 `modal.locator('.ant-modal-header').click()` 让 dropdown 失焦关闭。**不要用 `Escape`**——它会关闭整个 Modal。
 - **表单 auto-fill 与 E2E 操作顺序**：`ImportantDatesModule` 选择 `internal_type=true` 的 date type 时会自动覆写 label 字段。E2E 测试中必须**先选 type 再填 label**，否则用户输入的 label 会被 auto-fill 覆盖。类似的 auto-fill 逻辑在其他模块中也可能存在，写 E2E 时需注意表单字段间的联动副作用。
-- **Contact Detail 动态 Tab 名称**：Tab 名来自后端 seed 数据的 `TemplatePage.Name`（"Contact information"、"Feed"、"Social"、"Life & goals"、"Information"），与前端 fallback tabs 的 i18n 翻译名不同。E2E 选择 tab 时必须用 seed 数据中的名称，且注意 "Contact information" 和 "Information" 两个 tab 共存，用 `{ name: 'Information', exact: true }` 精确匹配。
+- **Contact Detail 动态 Tab 名称**：Tab 名来自后端 seed 数据的 `TemplatePage.Name`（"Contact information"、"Feed"、"Social"、"Activities"、"Goals"、"Information"），与前端 fallback tabs 的 i18n 翻译名不同。E2E 选择 tab 时必须用 seed 数据中的名称，且注意 "Contact information" 和 "Information" 两个 tab 共存，用 `{ name: 'Information', exact: true }` 精确匹配。
 - **Contact Detail 页面多个同名按钮**：动态 tabs 加载后，第一个 tab 默认展开所有模块，每个模块可能有 "Edit" 按钮。选择顶部操作栏的 Edit 按钮时用 `.first()`。

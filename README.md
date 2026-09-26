@@ -4,7 +4,7 @@
 [![Release](https://github.com/naiba/bonds/actions/workflows/release.yml/badge.svg)](https://github.com/naiba/bonds/actions/workflows/release.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/naiba/bonds)](https://github.com/naiba/bonds/releases)
 
-📖 [Documentation](https://naiba.github.io/bonds/) | [中文文档](README_zh.md) | 💬 [Discord](https://discord.gg/faaEJyt4h)
+📖 [Documentation](https://naiba.github.io/bonds/) | [中文文档](README_zh.md) | 💬 [Discord](https://discord.gg/qp6TfrVekV)
 
 <a href="https://www.producthunt.com/products/bonds?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-bonds" target="_blank" rel="noopener noreferrer"><img alt="Bonds - Remember everything about the people who matter. | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1091729&amp;theme=light&amp;t=1772852214754"></a>
 
@@ -26,8 +26,8 @@ Monica is a beloved open-source personal CRM with 24k+ stars. But as a side proj
 
 ## Features
 
-- **Contacts**: Full lifecycle management with notes, tasks, reminders, gifts, money and item loans, activities, life events, pets, and more. Includes a needs-verification flag to keep your data fresh.
-- **Vault Dashboard**: Responsive 3-column layout with activity feed, life events, life metrics tracking (+1 counter), mood recording, upcoming reminders, and due tasks.
+- **Contacts**: Full lifecycle management with notes, tasks, reminders, gifts, money and item loans, activities, goals, pets, and more. Includes a needs-verification flag to keep your data fresh.
+- **Vault Dashboard**: Responsive 3-column layout with a feed, activities, life metrics tracking (+1 counter), mood recording, upcoming reminders, and due tasks.
 - **Vaults**: Multi-vault data isolation with role-based access (Manager, Editor, Viewer).
 - **Reminders**: One-time and recurring (weekly, monthly, yearly), with email and Shoutrrr-compatible notifications.
 - **Full-text Search**: Bleve-powered CJK-aware search across contacts and notes.
@@ -44,7 +44,7 @@ Monica is a beloved open-source personal CRM with 24k+ stars. But as a side proj
 - **OAuth Login**: GitHub and Google single sign-on.
 - **User Invitations**: Invite others to your account via email with permission levels.
 - **Audit Log**: Feed of all changes across contacts.
-- **Geocoding**: Address coordinates via Nominatim (free) or LocationIQ.
+- **Geocoding**: Extensible provider configuration for Nominatim, LocationIQ, Geoapify, and public or self-hosted Photon.
 - **Shoutrrr Notifications**: Reminder delivery via Telegram and other Shoutrrr-compatible channels.
 - **i18n**: English and Chinese, frontend and backend.
 
@@ -56,25 +56,23 @@ Monica is a beloved open-source personal CRM with 24k+ stars. But as a side proj
 # Download docker-compose.yml
 curl -O https://raw.githubusercontent.com/naiba/bonds/main/docker-compose.yml
 
+# Generate and export a 256-bit JWT signing secret in this shell
+export JWT_SECRET="$(openssl rand -hex 32)"
+
 # Start the service
 docker compose up -d
 ```
 
 Open **http://localhost:8080** and create your account.
 
-To customize settings, edit `docker-compose.yml`:
-
-```yaml
-environment:
-  - JWT_SECRET=your-secret-key-here   # ⚠️ Change this!
-```
+Generate the secret once, store it in a protected environment or secret store, and reuse the same value for every restart. Plan JWT secret rotation: it invalidates existing sessions and can require DAV subscription credentials to be entered again because their encryption derives from this secret.
 
 ### Option 2: Pre-built Binary
 
 Download the latest release from [GitHub Releases](https://github.com/naiba/bonds/releases), then:
 
 ```bash
-export JWT_SECRET=your-secret-key-here
+export JWT_SECRET="$(openssl rand -hex 32)"
 ./bonds-server
 ```
 
@@ -82,7 +80,7 @@ The server starts at **http://localhost:8080** with an embedded frontend and SQL
 
 ### Option 3: Build from Source
 
-**Prerequisites**: Go 1.25+, [Bun](https://bun.sh) 1.x
+**Prerequisites**: Go 1.26+, [Bun](https://bun.sh) 1.x
 
 ```bash
 git clone https://github.com/naiba/bonds.git
@@ -95,7 +93,7 @@ make setup
 make build-all
 
 # Run it
-export JWT_SECRET=your-secret-key-here
+export JWT_SECRET="$(openssl rand -hex 32)"
 ./server/bin/bonds-server
 ```
 
@@ -117,7 +115,7 @@ cp server/.env.example server/.env
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEBUG` | `false` | Enable debug mode: Echo request logging, GORM SQL logging, Swagger UI (default on) |
-| `JWT_SECRET` | — | **Required in production.** Signing key for auth tokens |
+| `JWT_SECRET` | — | **Required in production.** Generate with `openssl rand -hex 32`, then persist and reuse the 256-bit signing key across restarts. |
 | `SETTINGS_ENC_KEY` | _(empty)_ | Optional. Enables AES-256-GCM encryption-at-rest for SMTP/OAuth/geocoding secrets. See [docs](https://naiba.github.io/bonds/guide/configuration#encrypting-sensitive-settings) |
 | `SERVER_PORT` | `8080` | Port the server listens on |
 | `SERVER_HOST` | `0.0.0.0` | Host address the server binds to |
@@ -139,7 +137,7 @@ The following are managed from the **Admin > System Settings** page after login:
 - **OAuth / OIDC**: GitHub, Google, and OIDC/SSO credentials.
 - **WebAuthn**: Relying Party ID, Display Name, Origins.
 - **Telegram**: Bot token for notifications.
-- **Geocoding**: Provider (Nominatim/LocationIQ), API key.
+- **Geocoding**: Active provider, address privacy precision, per-provider credentials, and self-hosted Photon URL.
 - **Storage**: Max upload size limit.
 - **Backup**: Cron schedule, Retention days.
 - **Swagger**: Enable or disable API documentation UI.
@@ -221,8 +219,8 @@ Bonds is a ground-up rewrite inspired by [Monica](https://github.com/monicahq/mo
 - **Individuals**: Free for any non-commercial use.
 - **Organizations**: Commercial use requires a paid license from the Licensor.
 - **Prohibited**: Reselling, sublicensing, or offering as a managed/hosted service.
-- **Change Date**: June 13, 2030, automatically converts to [AGPL-3.0](LICENSE) (same as original Monica).
+- **Change Date**: Each version automatically converts to [AGPL-3.0](LICENSE) on the fourth anniversary of that version's first publicly available distribution.
 
-After the Change Date, the software becomes fully open source under AGPL-3.0.
+After its Change Date, that version becomes fully open source under AGPL-3.0.
 
 By submitting code, documentation, translations, or any other contribution, you agree to the [contribution terms](CONTRIBUTING.md), including waiving all ownership and other rights or claims in that contribution to the fullest extent permitted by law.

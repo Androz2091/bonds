@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/naiba/bonds/internal/dto"
@@ -15,7 +16,7 @@ import (
 
 var (
 	ErrFileNotFound = errors.New("file not found")
-	ErrFileInUse    = errors.New("file is referenced by a quick fact")
+	ErrFileInUse    = errors.New("file is in use")
 )
 
 type VaultFileService struct {
@@ -58,6 +59,98 @@ func (s *VaultFileService) Get(id uint, vaultID string) (*dto.VaultFileResponse,
 	}
 	resp := toVaultFileResponse(&file)
 	return &resp, nil
+}
+
+// ResolvePath returns the local path for a vault file. New files always use
+// UploadDir/UUID. OriginalURL is only consulted for legacy Monica imports and
+// only when it resolves to a local file contained by UploadDir.
+func (s *VaultFileService) ResolvePath(id uint, vaultID string) (*dto.VaultFileResponse, string, error) {
+	var file models.File
+	if err := s.db.Where("id = ? AND vault_id = ?", id, vaultID).First(&file).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, "", ErrFileNotFound
+		}
+		return nil, "", err
+	}
+	resp := toVaultFileResponse(&file)
+	return &resp, s.localPath(&file), nil
+}
+
+func (s *VaultFileService) localPath(file *models.File) string {
+	canonical := filepath.Join(s.uploadDir, file.UUID)
+	if _, err := os.Stat(canonical); err == nil || file.OriginalURL == nil {
+		return canonical
+	}
+	legacy, ok := safeLegacyFilePath(s.uploadDir, *file.OriginalURL)
+	if !ok {
+		return canonical
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		return canonical
+	}
+	return legacy
+}
+
+func safeLegacyFilePath(uploadDir, candidate string) (string, bool) {
+	if uploadDir == "" || candidate == "" || strings.Contains(candidate, "://") {
+		return "", false
+	}
+	root, err := filepath.Abs(uploadDir)
+	if err != nil {
+		return "", false
+	}
+	path := candidate
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(root, path)
+	}
+	path, err = filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", false
+	}
+	return path, true
+}
+
+// MigrateLegacyPaths moves legacy Monica-imported files into the canonical
+// flat storage layout. It is idempotent and leaves external OriginalURL values
+// untouched.
+func (s *VaultFileService) MigrateLegacyPaths() (int, error) {
+	var files []models.File
+	if err := s.db.Where("original_url IS NOT NULL AND original_url <> ''").Find(&files).Error; err != nil {
+		return 0, err
+	}
+	migrated := 0
+	for i := range files {
+		legacy, ok := safeLegacyFilePath(s.uploadDir, *files[i].OriginalURL)
+		if !ok {
+			continue
+		}
+		canonical := filepath.Join(s.uploadDir, files[i].UUID)
+		if _, err := os.Stat(canonical); err == nil {
+			if err := s.db.Model(&files[i]).Update("original_url", nil).Error; err != nil {
+				return migrated, err
+			}
+			continue
+		}
+		if _, err := os.Stat(legacy); err != nil {
+			continue
+		}
+		if err := os.MkdirAll(s.uploadDir, 0o755); err != nil {
+			return migrated, err
+		}
+		if err := os.Rename(legacy, canonical); err != nil {
+			return migrated, fmt.Errorf("migrate legacy file %d: %w", files[i].ID, err)
+		}
+		if err := s.db.Model(&files[i]).Update("original_url", nil).Error; err != nil {
+			_ = os.Rename(canonical, legacy)
+			return migrated, err
+		}
+		migrated++
+	}
+	return migrated, nil
 }
 
 func (s *VaultFileService) Upload(vaultID string, contactID string, authorID string, fileType string, filename string, mimeType string, size int64, data io.Reader) (*dto.VaultFileResponse, error) {
@@ -109,23 +202,16 @@ func (s *VaultFileService) Upload(vaultID string, contactID string, authorID str
 }
 
 func (s *VaultFileService) Delete(id uint, vaultID string) error {
-	var file models.File
-	if err := s.db.Where("id = ? AND vault_id = ?", id, vaultID).First(&file).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrFileNotFound
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		file, err := lockFileForMutation(tx, id, vaultID)
+		if err != nil {
+			return err
 		}
-		return err
-	}
-
-	if err := s.ensureFileNotUsedByQuickFact(file.ID); err != nil {
-		return err
-	}
-
-	return s.deleteFileRecord(&file)
-}
-
-func (s *VaultFileService) AssignToQuickFact(fileID uint, quickFactID uint, vaultID string) error {
-	return assignFileToQuickFact(s.db, fileID, quickFactID, vaultID)
+		if err := ensureFileNotUsed(tx, file.ID, true); err != nil {
+			return err
+		}
+		return s.deleteFileRecord(tx, &file)
+	})
 }
 
 func assignFileToQuickFact(db *gorm.DB, fileID uint, quickFactID uint, vaultID string) error {
@@ -136,32 +222,63 @@ func assignFileToQuickFact(db *gorm.DB, fileID uint, quickFactID uint, vaultID s
 	}).Error
 }
 
-func (s *VaultFileService) ensureFileNotUsedByQuickFact(fileID uint) error {
-	var quickFactCount int64
-	if err := s.db.Model(&models.QuickFact{}).Where("file_id = ?", fileID).Count(&quickFactCount).Error; err != nil {
+func ensureFileNotUsed(db *gorm.DB, fileID uint, includeQuickFacts bool) error {
+	if includeQuickFacts {
+		var quickFactCount int64
+		if err := db.Model(&models.QuickFact{}).Where("file_id = ?", fileID).Count(&quickFactCount).Error; err != nil {
+			return err
+		}
+		if quickFactCount > 0 {
+			return ErrFileInUse
+		}
+	}
+	var contentReferenceCount int64
+	if err := db.Model(&models.ContentFileReference{}).Where("file_id = ?", fileID).Count(&contentReferenceCount).Error; err != nil {
 		return err
 	}
-	if quickFactCount > 0 {
+	if contentReferenceCount > 0 {
 		return ErrFileInUse
 	}
 	return nil
 }
 
 func (s *VaultFileService) ForceDeleteFile(id uint, vaultID string) error {
-	var file models.File
-	if err := s.db.Where("id = ? AND vault_id = ?", id, vaultID).First(&file).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrFileNotFound
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		file, err := lockFileForMutation(tx, id, vaultID)
+		if err != nil {
+			return err
 		}
-		return err
-	}
-	return s.deleteFileRecord(&file)
+		if err := ensureFileNotUsed(tx, file.ID, false); err != nil {
+			return err
+		}
+		return s.deleteFileRecord(tx, &file)
+	})
 }
 
-func (s *VaultFileService) deleteFileRecord(file *models.File) error {
-	destPath := filepath.Join(s.uploadDir, file.UUID)
-	os.Remove(destPath)
-	return s.db.Delete(file).Error
+func lockFileForMutation(tx *gorm.DB, id uint, vaultID string) (models.File, error) {
+	result := tx.Exec("UPDATE files SET updated_at = updated_at WHERE id = ? AND vault_id = ?", id, vaultID)
+	if result.Error != nil {
+		return models.File{}, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return models.File{}, ErrFileNotFound
+	}
+	var file models.File
+	if err := tx.Where("id = ? AND vault_id = ?", id, vaultID).First(&file).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return models.File{}, ErrFileNotFound
+		}
+		return models.File{}, err
+	}
+	return file, nil
+}
+
+func (s *VaultFileService) deleteFileRecord(tx *gorm.DB, file *models.File) error {
+	destPath := s.localPath(file)
+	if err := os.Remove(destPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove file %s: %w", file.UUID, err)
+	}
+	return tx.Delete(file).Error
 }
 
 func toVaultFileResponse(f *models.File) dto.VaultFileResponse {

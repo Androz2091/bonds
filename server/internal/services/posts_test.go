@@ -1,6 +1,9 @@
 package services
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,10 +20,10 @@ type postTestContext struct {
 	db        *gorm.DB
 }
 
-func setupPostTest(t *testing.T) (*PostService, uint) {
+func setupPostTest(t *testing.T) (*PostService, uint, string) {
 	t.Helper()
 	ctx := setupPostTestFull(t)
-	return ctx.svc, ctx.journalID
+	return ctx.svc, ctx.journalID, ctx.vaultID
 }
 
 func setupPostTestFull(t *testing.T) postTestContext {
@@ -60,9 +63,9 @@ func setupPostTestFull(t *testing.T) postTestContext {
 }
 
 func TestCreatePost(t *testing.T) {
-	svc, journalID := setupPostTest(t)
+	svc, journalID, vaultID := setupPostTest(t)
 
-	post, err := svc.Create(journalID, dto.CreatePostRequest{
+	post, err := svc.Create(journalID, vaultID, dto.CreatePostRequest{
 		Title:     "My First Post",
 		Published: true,
 		WrittenAt: time.Now(),
@@ -91,17 +94,90 @@ func TestCreatePost(t *testing.T) {
 	}
 }
 
-func TestListPosts(t *testing.T) {
-	svc, journalID := setupPostTest(t)
+func TestPostMarkdownRendersAndTracksUploadedFiles(t *testing.T) {
+	ctx := setupPostTestFull(t)
+	file := models.File{VaultID: ctx.vaultID, UUID: "markdown-file", Name: "photo.png", MimeType: "image/png", Type: "photo"}
+	if err := ctx.db.Create(&file).Error; err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+	post, err := ctx.svc.Create(ctx.journalID, ctx.vaultID, dto.CreatePostRequest{
+		Title: "Markdown", WrittenAt: time.Now(),
+		Sections: []dto.PostSectionInput{{
+			Position: 0, Label: "Body", Content: "**bold**\n\n![photo](bonds-file:" + fmt.Sprint(file.ID) + ")", ContentFormat: "markdown",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Create Markdown post: %v", err)
+	}
+	section := post.Sections[0]
+	if section.ContentFormat != "markdown" || !strings.Contains(section.RenderedContent, "<strong>bold</strong>") || !strings.Contains(section.RenderedContent, `data-bonds-file="`) {
+		t.Fatalf("Markdown section response = %+v", section)
+	}
+	var referenceCount int64
+	ctx.db.Model(&models.ContentFileReference{}).Where("file_id = ?", file.ID).Count(&referenceCount)
+	if referenceCount != 1 {
+		t.Fatalf("content file reference count = %d, want 1", referenceCount)
+	}
+	fileSvc := NewVaultFileService(ctx.db, t.TempDir())
+	if err := fileSvc.Delete(file.ID, ctx.vaultID); !errors.Is(err, ErrFileInUse) {
+		t.Fatalf("Delete referenced file error = %v, want ErrFileInUse", err)
+	}
 
-	_, err := svc.Create(journalID, dto.CreatePostRequest{
-		Title:     "Post 1",
-		WrittenAt: time.Now(),
+	legacyUpdated, err := ctx.svc.Update(post.ID, ctx.journalID, ctx.vaultID, dto.UpdatePostRequest{
+		Title: "Legacy client update", WrittenAt: post.WrittenAt,
+		Sections: []dto.PostSectionInput{{Position: 0, Label: "Body", Content: "![photo](bonds-file:" + fmt.Sprint(file.ID) + ")"}},
+	})
+	if err != nil {
+		t.Fatalf("Update Markdown post without format: %v", err)
+	}
+	if legacyUpdated.Sections[0].ContentFormat != "markdown" {
+		t.Fatalf("ContentFormat after legacy update = %q, want markdown", legacyUpdated.Sections[0].ContentFormat)
+	}
+	ctx.db.Model(&models.ContentFileReference{}).Where("file_id = ?", file.ID).Count(&referenceCount)
+	if referenceCount != 1 {
+		t.Fatalf("content file reference count after legacy update = %d, want 1", referenceCount)
+	}
+
+	_, err = ctx.svc.Update(post.ID, ctx.journalID, ctx.vaultID, dto.UpdatePostRequest{
+		Title: "Markdown", WrittenAt: post.WrittenAt,
+		Sections: []dto.PostSectionInput{{Position: 0, Label: "Body", Content: "reference removed", ContentFormat: "markdown"}},
+	})
+	if err != nil {
+		t.Fatalf("Update Markdown post: %v", err)
+	}
+	ctx.db.Model(&models.ContentFileReference{}).Where("file_id = ?", file.ID).Count(&referenceCount)
+	if referenceCount != 0 {
+		t.Fatalf("content file reference count after update = %d, want 0", referenceCount)
+	}
+}
+
+func TestPostRejectsUnknownMarkdownFile(t *testing.T) {
+	ctx := setupPostTestFull(t)
+	_, err := ctx.svc.Create(ctx.journalID, ctx.vaultID, dto.CreatePostRequest{
+		Title: "Missing file", WrittenAt: time.Now(),
+		Sections: []dto.PostSectionInput{{Content: "[missing](bonds-file:999999)", ContentFormat: "markdown"}},
+	})
+	if !errors.Is(err, ErrFileNotFound) {
+		t.Fatalf("Create error = %v, want ErrFileNotFound", err)
+	}
+}
+
+func TestListPosts(t *testing.T) {
+	ctx := setupPostTestFull(t)
+	contact := models.Contact{VaultID: ctx.vaultID, FirstName: strPtrOrNil("Alice")}
+	if err := ctx.db.Create(&contact).Error; err != nil {
+		t.Fatalf("Create contact failed: %v", err)
+	}
+
+	firstPost, err := ctx.svc.Create(ctx.journalID, ctx.vaultID, dto.CreatePostRequest{
+		Title:      "Post 1",
+		WrittenAt:  time.Now(),
+		ContactIDs: []string{contact.ID},
 	})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
-	_, err = svc.Create(journalID, dto.CreatePostRequest{
+	_, err = ctx.svc.Create(ctx.journalID, ctx.vaultID, dto.CreatePostRequest{
 		Title:     "Post 2",
 		WrittenAt: time.Now(),
 	})
@@ -109,19 +185,29 @@ func TestListPosts(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	posts, err := svc.List(journalID)
+	posts, err := ctx.svc.List(ctx.journalID, ctx.vaultID)
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
 	if len(posts) != 2 {
 		t.Errorf("Expected 2 posts, got %d", len(posts))
 	}
+	for _, post := range posts {
+		if post.ID != firstPost.ID {
+			continue
+		}
+		if len(post.Contacts) != 1 || post.Contacts[0].ID != contact.ID {
+			t.Errorf("Expected Post 1 to include contact %q, got %+v", contact.ID, post.Contacts)
+		}
+		return
+	}
+	t.Errorf("Expected to find Post 1 with ID %d", firstPost.ID)
 }
 
 func TestGetPost(t *testing.T) {
-	svc, journalID := setupPostTest(t)
+	svc, journalID, vaultID := setupPostTest(t)
 
-	created, err := svc.Create(journalID, dto.CreatePostRequest{
+	created, err := svc.Create(journalID, vaultID, dto.CreatePostRequest{
 		Title:     "Get Me",
 		WrittenAt: time.Now(),
 		Sections: []dto.PostSectionInput{
@@ -132,7 +218,7 @@ func TestGetPost(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	got, err := svc.Get(created.ID, journalID)
+	got, err := svc.Get(created.ID, journalID, vaultID)
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -148,9 +234,9 @@ func TestGetPost(t *testing.T) {
 }
 
 func TestUpdatePost(t *testing.T) {
-	svc, journalID := setupPostTest(t)
+	svc, journalID, vaultID := setupPostTest(t)
 
-	created, err := svc.Create(journalID, dto.CreatePostRequest{
+	created, err := svc.Create(journalID, vaultID, dto.CreatePostRequest{
 		Title:     "Original",
 		WrittenAt: time.Now(),
 		Sections: []dto.PostSectionInput{
@@ -161,7 +247,7 @@ func TestUpdatePost(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	updated, err := svc.Update(created.ID, journalID, dto.UpdatePostRequest{
+	updated, err := svc.Update(created.ID, journalID, vaultID, dto.UpdatePostRequest{
 		Title:     "Updated",
 		Published: true,
 		Sections: []dto.PostSectionInput{
@@ -184,9 +270,9 @@ func TestUpdatePost(t *testing.T) {
 }
 
 func TestDeletePost(t *testing.T) {
-	svc, journalID := setupPostTest(t)
+	svc, journalID, vaultID := setupPostTest(t)
 
-	created, err := svc.Create(journalID, dto.CreatePostRequest{
+	created, err := svc.Create(journalID, vaultID, dto.CreatePostRequest{
 		Title:     "To delete",
 		WrittenAt: time.Now(),
 	})
@@ -194,11 +280,11 @@ func TestDeletePost(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	if err := svc.Delete(created.ID, journalID); err != nil {
+	if err := svc.Delete(created.ID, journalID, vaultID); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	posts, err := svc.List(journalID)
+	posts, err := svc.List(journalID, vaultID)
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
@@ -208,28 +294,28 @@ func TestDeletePost(t *testing.T) {
 }
 
 func TestPostNotFound(t *testing.T) {
-	svc, journalID := setupPostTest(t)
+	svc, journalID, vaultID := setupPostTest(t)
 
-	_, err := svc.Get(9999, journalID)
+	_, err := svc.Get(9999, journalID, vaultID)
 	if err != ErrPostNotFound {
 		t.Errorf("Expected ErrPostNotFound, got %v", err)
 	}
 
-	_, err = svc.Update(9999, journalID, dto.UpdatePostRequest{Title: "nope"})
+	_, err = svc.Update(9999, journalID, vaultID, dto.UpdatePostRequest{Title: "nope"})
 	if err != ErrPostNotFound {
 		t.Errorf("Expected ErrPostNotFound, got %v", err)
 	}
 
-	err = svc.Delete(9999, journalID)
+	err = svc.Delete(9999, journalID, vaultID)
 	if err != ErrPostNotFound {
 		t.Errorf("Expected ErrPostNotFound, got %v", err)
 	}
 }
 
 func TestPostGetIncrementsViewCount(t *testing.T) {
-	svc, journalID := setupPostTest(t)
+	svc, journalID, vaultID := setupPostTest(t)
 
-	created, err := svc.Create(journalID, dto.CreatePostRequest{
+	created, err := svc.Create(journalID, vaultID, dto.CreatePostRequest{
 		Title:     "View Count Test",
 		WrittenAt: time.Now(),
 	})
@@ -238,7 +324,7 @@ func TestPostGetIncrementsViewCount(t *testing.T) {
 	}
 	baseCount := created.ViewCount
 
-	got1, err := svc.Get(created.ID, journalID)
+	got1, err := svc.Get(created.ID, journalID, vaultID)
 	if err != nil {
 		t.Fatalf("Get #1 failed: %v", err)
 	}
@@ -246,7 +332,7 @@ func TestPostGetIncrementsViewCount(t *testing.T) {
 		t.Errorf("Expected view_count %d after first Get, got %d", baseCount+1, got1.ViewCount)
 	}
 
-	got2, err := svc.Get(created.ID, journalID)
+	got2, err := svc.Get(created.ID, journalID, vaultID)
 	if err != nil {
 		t.Fatalf("Get #2 failed: %v", err)
 	}
@@ -267,7 +353,7 @@ func TestPostUpdateWithContacts(t *testing.T) {
 		t.Fatalf("Create contact2 failed: %v", err)
 	}
 
-	post, err := ctx.svc.Create(ctx.journalID, dto.CreatePostRequest{
+	post, err := ctx.svc.Create(ctx.journalID, ctx.vaultID, dto.CreatePostRequest{
 		Title:     "Post with contacts",
 		WrittenAt: time.Now(),
 	})
@@ -275,7 +361,7 @@ func TestPostUpdateWithContacts(t *testing.T) {
 		t.Fatalf("Create post failed: %v", err)
 	}
 
-	updated, err := ctx.svc.Update(post.ID, ctx.journalID, dto.UpdatePostRequest{
+	updated, err := ctx.svc.Update(post.ID, ctx.journalID, ctx.vaultID, dto.UpdatePostRequest{
 		Title:      "Post with contacts",
 		ContactIDs: []string{contact1.ID, contact2.ID},
 	})
@@ -286,7 +372,7 @@ func TestPostUpdateWithContacts(t *testing.T) {
 		t.Errorf("Expected 2 contacts, got %d", len(updated.Contacts))
 	}
 
-	updated2, err := ctx.svc.Update(post.ID, ctx.journalID, dto.UpdatePostRequest{
+	updated2, err := ctx.svc.Update(post.ID, ctx.journalID, ctx.vaultID, dto.UpdatePostRequest{
 		Title:      "Post cleared contacts",
 		ContactIDs: []string{},
 	})
@@ -295,5 +381,45 @@ func TestPostUpdateWithContacts(t *testing.T) {
 	}
 	if len(updated2.Contacts) != 0 {
 		t.Errorf("Expected 0 contacts after clearing, got %d", len(updated2.Contacts))
+	}
+}
+
+func TestPostContactIDsFromSectionsPrefersInlineMentions(t *testing.T) {
+	markerID := "550e8400-e29b-41d4-a716-446655440000"
+	legacyID := "550e8400-e29b-41d4-a716-446655440001"
+	sections := []dto.PostSectionInput{{Content: "Dinner with @[Alice](contact:" + markerID + ")"}}
+
+	got := postContactIDsFromSections(sections, []string{legacyID})
+	if len(got) != 1 || got[0] != markerID {
+		t.Fatalf("inline marker must be authoritative, got %v", got)
+	}
+	got = postContactIDsFromSections([]dto.PostSectionInput{{Content: "Legacy text"}}, []string{legacyID})
+	if len(got) != 1 || got[0] != legacyID {
+		t.Fatalf("legacy explicit association must remain supported, got %v", got)
+	}
+}
+
+func TestPostResponseIncludesContactHoverCardDetails(t *testing.T) {
+	firstName := "Alice"
+	nickname := "Ace"
+	jobPosition := "Designer"
+	lastTalkedTo := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	response := toPostResponse(&models.Post{Contacts: []models.Contact{{
+		ID:           "550e8400-e29b-41d4-a716-446655440000",
+		FirstName:    &firstName,
+		Nickname:     &nickname,
+		JobPosition:  &jobPosition,
+		LastTalkedTo: &lastTalkedTo,
+	}}})
+
+	if len(response.Contacts) != 1 {
+		t.Fatalf("contacts=%+v", response.Contacts)
+	}
+	got := response.Contacts[0]
+	if got.Nickname != nickname || got.JobPosition != jobPosition {
+		t.Fatalf("hover card details=%+v", got)
+	}
+	if got.LastTalkedTo == nil || !got.LastTalkedTo.Equal(lastTalkedTo) {
+		t.Fatalf("last_talked_to=%v", got.LastTalkedTo)
 	}
 }

@@ -17,6 +17,7 @@ import {
   theme,
   Drawer,
   Space,
+  Grid,
 } from "antd";
 import {
   PlusOutlined,
@@ -78,6 +79,7 @@ export default function Notifications() {
   const { message } = App.useApp();
   const { t } = useTranslation();
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
   const dateFormats = useDateFormat();
   const qk = ["settings", "notifications"];
 
@@ -391,7 +393,7 @@ export default function Notifications() {
             }
             extra={
               formType === "shoutrrr"
-                ? <span>{t("settings.notifications.shoutrrr_help")} — <a href="https://containrrr.dev/shoutrrr/v0.8/services/overview/" target="_blank" rel="noopener noreferrer">{t("settings.notifications.shoutrrr_docs_link")}</a></span>
+                ? <span>{t("settings.notifications.shoutrrr_help")} — <a href="https://shoutrrr.nickfedor.com/services/overview/" target="_blank" rel="noopener noreferrer">{t("settings.notifications.shoutrrr_docs_link")}</a></span>
                 : isEditing && editingChannel?.type === "email"
                   ? t("settings.notifications.content_changed_reverify")
                   : null
@@ -449,7 +451,7 @@ export default function Notifications() {
         title={t("settings.notifications.logs_title")}
         open={logsChannelId !== null}
         onClose={() => setLogsChannelId(null)}
-        width={480}
+        size={screens.md ? 480 : "100%"}
       >
         {logs.length === 0 ? (
           <Empty description={t("settings.notifications.no_logs")} />

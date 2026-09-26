@@ -1,12 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { apiUrl } from './api-base-url';
+import { E2E_ADMIN_EMAIL, E2E_ADMIN_PASSWORD } from './admin-test-account';
 
-// fullyParallel + workers>1 时，不同 describe 块可能被分配到不同 worker，
-// 导致 serial 的 "Admin Features" 中 adminEmail 闭包变量为 undefined。
-// 整个文件串行运行避免跨 worker 状态丢失。
+// Admin tests mutate shared instance-wide state and therefore run in order.
 test.describe.configure({ mode: 'serial' });
 
-const PASSWORD = 'password123';
+const PASSWORD = E2E_ADMIN_PASSWORD;
 
 type LoginResponse = {
   data?: {
@@ -86,29 +85,21 @@ test.describe('Login Page Improvements', () => {
 });
 
 test.describe('Admin Features', () => {
-  let adminEmail: string;
-
-  // fullyParallel 模式下 serial describe 可能被分配到晚启动的 worker，
-  // 此 hook 确保每个测试执行前 adminEmail 已初始化
-  test.beforeEach(async ({ page }) => {
-    if (!adminEmail) {
-      adminEmail = `admin-${Date.now()}@example.com`;
-      await registerUser(page, adminEmail, 'Admin', 'Boss');
-    }
-  });
+  const adminEmail = E2E_ADMIN_EMAIL;
 
   test('first registered user is admin and can access User Management', async ({ page }) => {
+    await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
     await expect(page.getByText('User Management')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('admin menu is visible in user dropdown', async ({ page }) => {
     await loginUser(page, adminEmail!);
 
     await expect(page.locator('.ant-avatar')).toBeVisible({ timeout: 5000 });
-    await page.locator('.ant-avatar').click();
+    await page.locator('.ant-layout-header .ant-dropdown-trigger').hover();
     await expect(page.getByText('Administration')).toBeVisible({ timeout: 5000 });
   });
 
@@ -117,8 +108,8 @@ test.describe('Admin Features', () => {
 
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByRole('table').getByText(adminEmail)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first().getByText(adminEmail)).toBeVisible({ timeout: 10000 });
   });
 
   test('non-admin should not see admin menu', async ({ page }) => {
@@ -127,7 +118,7 @@ test.describe('Admin Features', () => {
     await registerUser(page, userEmail);
 
     // Open user dropdown
-    await page.locator('.ant-avatar').click();
+    await page.locator('.ant-layout-header .ant-dropdown-trigger').hover();
     // "Administration" should NOT appear for non-admin
     await expect(page.getByText('Administration')).not.toBeVisible({ timeout: 3000 });
   });
@@ -169,6 +160,34 @@ test.describe('Admin Features', () => {
     await expect(page.getByRole('button', { name: 'Save Settings' })).toBeVisible({ timeout: 5000 });
   });
 
+  test('admin can configure and activate a structured geocoding provider', async ({ page }) => {
+    await loginUser(page, adminEmail);
+    await page.goto('/admin/settings');
+    await page.waitForLoadState('networkidle');
+
+    await page.getByText('Geocoding', { exact: true }).click();
+    await expect(page.getByText('Public Photon is a fair-use demo')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('#providers_photon_base_url')).toHaveValue('https://photon.komoot.io');
+
+    const geoapifyCard = page.locator('.ant-card-small').filter({ has: page.getByText('Geoapify', { exact: true }) });
+    await geoapifyCard.locator('#providers_geoapify_api_key').fill('e2e-geoapify-key');
+    await geoapifyCard.getByRole('button', { name: /Save provider/ }).click();
+    await expect(page.getByText('Provider configuration saved')).toBeVisible({ timeout: 10000 });
+    await expect(geoapifyCard.getByText('Ready', { exact: true })).toBeVisible({ timeout: 10000 });
+
+    await page.locator('#active_provider').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: 'Geoapify' }).click();
+    await page.getByRole('button', { name: /Save active settings/ }).click();
+    await expect(page.getByText('Active geocoding settings saved')).toBeVisible({ timeout: 10000 });
+
+    await page.reload();
+    await page.getByText('Geocoding', { exact: true }).click();
+    const providerField = page
+      .locator('#active_provider')
+      .locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " ant-form-item ")][1]');
+    await expect(providerField).toContainText('Geoapify');
+  });
+
   let secondUserEmail: string;
 
   test('admin can disable a user', async ({ page }) => {
@@ -178,7 +197,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: secondUserEmail });
     await expect(row).toBeVisible({ timeout: 5000 });
@@ -193,7 +212,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: secondUserEmail });
     await expect(row.locator('.ant-tag').filter({ hasText: 'Disabled' })).toBeVisible({ timeout: 5000 });
@@ -207,7 +226,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: secondUserEmail });
     await expect(row.locator('.ant-tag').filter({ hasText: 'User' })).toBeVisible({ timeout: 5000 });
@@ -221,7 +240,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: secondUserEmail });
     await expect(row.locator('.ant-tag').filter({ hasText: 'Admin' })).toBeVisible({ timeout: 5000 });
@@ -235,7 +254,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const selfRow = page.getByRole('row').filter({ hasText: adminEmail });
     await expect(selfRow).toBeVisible({ timeout: 5000 });
@@ -250,7 +269,7 @@ test.describe('Admin Features', () => {
     await loginUser(page, adminEmail);
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
-    await expect(page.getByRole('table')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first()).toBeVisible({ timeout: 10000 });
 
     const row = page.getByRole('row').filter({ hasText: throwawayEmail });
     await expect(row).toBeVisible({ timeout: 5000 });
@@ -262,7 +281,7 @@ test.describe('Admin Features', () => {
     await popconfirm.getByRole('button', { name: 'OK' }).click();
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByRole('table').getByText(throwawayEmail)).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first().getByText(throwawayEmail)).not.toBeVisible({ timeout: 10000 });
   });
 
   test('admin can save and persist settings', async ({ page }) => {
@@ -367,7 +386,7 @@ test.describe('Admin Features', () => {
     const deleteResp = page.waitForResponse(
       (resp) => resp.url().includes('/admin/backups') && resp.request().method() === 'DELETE'
     );
-    await page.locator('.ant-popconfirm').getByRole('button', { name: /ok|yes/i }).click();
+    await page.getByRole('tooltip').getByRole('button', { name: /ok|yes/i }).click();
     const delResp = await deleteResp;
     expect(delResp.status()).toBeLessThan(400);
     await expect(page.getByText('No backups yet')).toBeVisible({ timeout: 10000 });
@@ -421,7 +440,7 @@ test.describe('Admin Features', () => {
     await page.goto('/admin/users');
     await page.waitForLoadState('networkidle');
 
-    await expect(page.getByRole('table').getByText(adminEmail)).not.toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('table').first().getByText(adminEmail)).not.toBeVisible({ timeout: 10000 });
   });
 
   test('non-admin user cannot access admin settings page', async ({ page }) => {

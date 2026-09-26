@@ -5,21 +5,19 @@ import "time"
 // --- Vault Settings Index + Update ---
 
 type VaultSettingsResponse struct {
-	ID                 string    `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
-	Name               string    `json:"name" example:"Family"`
-	Description        string    `json:"description" example:"Vault for family contacts"`
-	NameOrder          *string   `json:"name_order" example:"%first_name% %last_name%"`
-	EffectiveNameOrder string    `json:"effective_name_order" example:"%first_name% %last_name%"`
-	DefaultTemplateID  *uint     `json:"default_template_id" example:"1"`
-	ShowGroupTab       bool      `json:"show_group_tab" example:"true"`
-	ShowTasksTab       bool      `json:"show_tasks_tab" example:"true"`
-	ShowFilesTab       bool      `json:"show_files_tab" example:"true"`
-	ShowJournalTab     bool      `json:"show_journal_tab" example:"true"`
-	ShowCompaniesTab   bool      `json:"show_companies_tab" example:"true"`
-	ShowReportsTab     bool      `json:"show_reports_tab" example:"true"`
-	ShowCalendarTab    bool      `json:"show_calendar_tab" example:"true"`
-	CreatedAt          time.Time `json:"created_at" example:"2026-01-15T10:30:00Z"`
-	UpdatedAt          time.Time `json:"updated_at" example:"2026-01-15T10:30:00Z"`
+	ID                string    `json:"id" example:"550e8400-e29b-41d4-a716-446655440000"`
+	Name              string    `json:"name" example:"Family"`
+	Description       string    `json:"description" example:"Vault for family contacts"`
+	DefaultTemplateID *uint     `json:"default_template_id" example:"1"`
+	ShowGroupTab      bool      `json:"show_group_tab" example:"true"`
+	ShowTasksTab      bool      `json:"show_tasks_tab" example:"true"`
+	ShowFilesTab      bool      `json:"show_files_tab" example:"true"`
+	ShowJournalTab    bool      `json:"show_journal_tab" example:"true"`
+	ShowCompaniesTab  bool      `json:"show_companies_tab" example:"true"`
+	ShowReportsTab    bool      `json:"show_reports_tab" example:"true"`
+	ShowCalendarTab   bool      `json:"show_calendar_tab" example:"true"`
+	CreatedAt         time.Time `json:"created_at" example:"2026-01-15T10:30:00Z"`
+	UpdatedAt         time.Time `json:"updated_at" example:"2026-01-15T10:30:00Z"`
 }
 
 type UpdateVaultSettingsRequest struct {
@@ -39,16 +37,6 @@ type UpdateTabVisibilityRequest struct {
 	ShowCalendarTab  *bool `json:"show_calendar_tab" example:"true"`
 }
 
-// --- Default Template ---
-
-type UpdateDefaultTemplateRequest struct {
-	DefaultTemplateID *uint `json:"default_template_id" example:"1"`
-}
-
-type UpdateVaultNameOrderRequest struct {
-	NameOrder *string `json:"name_order" example:"%first_name% %last_name%{nickname? (%nickname%)}"`
-}
-
 // --- Vault Users Management ---
 
 type AddVaultUserRequest struct {
@@ -66,6 +54,7 @@ type VaultUserResponse struct {
 	Email      string `json:"email" example:"user@example.com"`
 	FirstName  string `json:"first_name" example:"John"`
 	LastName   string `json:"last_name" example:"Doe"`
+	Disabled   bool   `json:"disabled" example:"false"`
 	Permission int    `json:"permission" example:"100"`
 }
 
@@ -156,46 +145,56 @@ type MoodTrackingParameterResponse struct {
 	UpdatedAt time.Time `json:"updated_at" example:"2026-01-15T10:30:00Z"`
 }
 
-// --- Life Event Categories + Types ---
+// --- Activity Categories + Types ---
 
-type CreateLifeEventCategoryRequest struct {
+type CreateActivityCategoryRequest struct {
 	Label    string `json:"label" validate:"required,min=1" example:"Birthdate"`
 	Position *int   `json:"position" example:"1"`
 }
 
-type UpdateLifeEventCategoryRequest struct {
+type UpdateActivityCategoryRequest struct {
 	Label    string `json:"label" validate:"required,min=1" example:"Birthdate"`
 	Position *int   `json:"position" example:"1"`
 }
 
-type LifeEventCategoryResponse struct {
-	ID           uint                    `json:"id" example:"1"`
-	Label        string                  `json:"label" example:"Birthdate"`
-	CanBeDeleted bool                    `json:"can_be_deleted" example:"false"`
-	Position     *int                    `json:"position" example:"1"`
-	Types        []LifeEventTypeResponse `json:"types,omitempty"`
-	CreatedAt    time.Time               `json:"created_at" example:"2026-01-15T10:30:00Z"`
-	UpdatedAt    time.Time               `json:"updated_at" example:"2026-01-15T10:30:00Z"`
+type ActivityCategoryResponse struct {
+	ID           uint                   `json:"id" example:"1"`
+	Label        string                 `json:"label" example:"Birthdate"`
+	CanBeDeleted bool                   `json:"can_be_deleted" example:"false"`
+	Position     *int                   `json:"position" example:"1"`
+	Types        []ActivityTypeResponse `json:"types,omitempty"`
+	CreatedAt    time.Time              `json:"created_at" example:"2026-01-15T10:30:00Z"`
+	UpdatedAt    time.Time              `json:"updated_at" example:"2026-01-15T10:30:00Z"`
 }
 
-type CreateLifeEventTypeRequest struct {
-	Label    string `json:"label" validate:"required,min=1" example:"Birthdate"`
-	Position *int   `json:"position" example:"1"`
+type CreateActivityTypeRequest struct {
+	Label               string  `json:"label" validate:"required,min=1" example:"Birthdate"`
+	Position            *int    `json:"position" example:"1"`
+	Icon                *string `json:"icon" example:"coffee"`
+	Color               *string `json:"color" example:"#8B5CF6"`
+	CountsAsInteraction bool    `json:"counts_as_interaction" example:"true"`
 }
 
-type UpdateLifeEventTypeRequest struct {
-	Label    string `json:"label" validate:"required,min=1" example:"Birthdate"`
-	Position *int   `json:"position" example:"1"`
+type UpdateActivityTypeRequest struct {
+	Label               string  `json:"label" validate:"required,min=1" example:"Birthdate"`
+	Position            *int    `json:"position" example:"1"`
+	Icon                *string `json:"icon" example:"coffee"`
+	Color               *string `json:"color" example:"#8B5CF6"`
+	CountsAsInteraction bool    `json:"counts_as_interaction" example:"true"`
 }
 
-type LifeEventTypeResponse struct {
-	ID           uint      `json:"id" example:"1"`
-	CategoryID   uint      `json:"category_id" example:"1"`
-	Label        string    `json:"label" example:"Birthdate"`
-	CanBeDeleted bool      `json:"can_be_deleted" example:"false"`
-	Position     *int      `json:"position" example:"1"`
-	CreatedAt    time.Time `json:"created_at" example:"2026-01-15T10:30:00Z"`
-	UpdatedAt    time.Time `json:"updated_at" example:"2026-01-15T10:30:00Z"`
+type ActivityTypeResponse struct {
+	ID                  uint      `json:"id" example:"1"`
+	CategoryID          uint      `json:"category_id" example:"1"`
+	Label               string    `json:"label" example:"Birthdate"`
+	CanBeDeleted        bool      `json:"can_be_deleted" example:"false"`
+	Position            *int      `json:"position" example:"1"`
+	SystemKind          string    `json:"system_kind" example:"phone_call"`
+	Icon                string    `json:"icon" example:"phone"`
+	Color               string    `json:"color" example:"#1677ff"`
+	CountsAsInteraction bool      `json:"counts_as_interaction" example:"true"`
+	CreatedAt           time.Time `json:"created_at" example:"2026-01-15T10:30:00Z"`
+	UpdatedAt           time.Time `json:"updated_at" example:"2026-01-15T10:30:00Z"`
 }
 
 // --- Quick Fact Templates ---

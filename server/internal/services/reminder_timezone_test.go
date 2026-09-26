@@ -38,6 +38,13 @@ func TestRescheduleRecurringReminderRespectsUserTimezone(t *testing.T) {
 	if err := db.Create(&vault).Error; err != nil {
 		t.Fatalf("vault: %v", err)
 	}
+	if err := db.Create(&models.UserVault{
+		VaultID:    vault.ID,
+		UserID:     resp.User.ID,
+		Permission: models.PermissionManager,
+	}).Error; err != nil {
+		t.Fatalf("vault membership: %v", err)
+	}
 	first, last := "Anniversary", "Person"
 	contact := models.Contact{VaultID: vault.ID, FirstName: &first, LastName: &last}
 	if err := db.Create(&contact).Error; err != nil {
@@ -94,5 +101,14 @@ func TestRescheduleRecurringReminderRespectsUserTimezone(t *testing.T) {
 	if local.Hour() != 16 || local.Minute() != 30 {
 		t.Errorf("rescheduled fire time = %s; expected 16:30 in Asia/Tokyo (got %02d:%02d local)",
 			rescheduled.ScheduledAt.Format(time.RFC3339), local.Hour(), local.Minute())
+	}
+	var dueCount int64
+	if err := db.Model(&models.ContactReminderScheduled{}).
+		Where("id = ? AND scheduled_at <= ?", rescheduled.ID, rescheduled.ScheduledAt.UTC()).
+		Count(&dueCount).Error; err != nil {
+		t.Fatalf("query recurring schedule at UTC fire instant: %v", err)
+	}
+	if dueCount != 1 {
+		t.Fatalf("recurring schedule is not due at its UTC fire instant %s", rescheduled.ScheduledAt.UTC().Format(time.RFC3339))
 	}
 }

@@ -53,16 +53,67 @@ func Connect(cfg *config.DatabaseConfig, debug bool) (*gorm.DB, error) {
 
 func AutoMigrate(db *gorm.DB) error {
 	existingSQLiteSchema := db.Dialector.Name() == "sqlite" && db.Migrator().HasTable(&models.Account{})
+	if err := migrateActivitySchema(db); err != nil {
+		return err
+	}
 	if err := migrateLegacyContactTasks(db); err != nil {
 		return err
 	}
-	if err := migrateLegacyLifeEventParticipantPivots(db); err != nil {
+	if err := migrateLegacyPivots(db); err != nil {
+		return err
+	}
+	if err := migrateLegacyShadowContacts(db); err != nil {
 		return err
 	}
 	if existingSQLiteSchema {
-		return autoMigrateExistingSQLiteSchema(db)
+		if err := autoMigrateExistingSQLiteSchema(db); err != nil {
+			return err
+		}
+		return runPostAutoMigrateBackfills(db)
 	}
-	return db.AutoMigrate(AllModels()...)
+	if err := db.AutoMigrate(AllModels()...); err != nil {
+		return err
+	}
+	return runPostAutoMigrateBackfills(db)
+}
+
+func runPostAutoMigrateBackfills(db *gorm.DB) error {
+	if err := backfillAccountMemberships(db); err != nil {
+		return err
+	}
+	if err := normalizeUserRegionalPreferences(db); err != nil {
+		return err
+	}
+	if err := normalizePendingReminderScheduleTimes(db); err != nil {
+		return err
+	}
+	if err := ensureLegacyContactTemplatePageVisibleColumn(db); err != nil {
+		return err
+	}
+	if err := backfillContactFeedEventContext(db); err != nil {
+		return err
+	}
+	if err := backfillContactReminderAudience(db); err != nil {
+		return err
+	}
+	if err := repairManagerlessVaults(db); err != nil {
+		return err
+	}
+	if hasLegacyContactLayoutTables(db) {
+		if err := models.BackfillGiftContactModules(db); err != nil {
+			return err
+		}
+		if err := models.BackfillContactTemplateLayout(db); err != nil {
+			return err
+		}
+		if err := models.BackfillActivityGoalLayout(db); err != nil {
+			return err
+		}
+		if err := models.BackfillContactSectionNames(db); err != nil {
+			return err
+		}
+	}
+	return migrateVaultContactLayouts(db)
 }
 
 type participantPivotMigration struct {
@@ -71,10 +122,9 @@ type participantPivotMigration struct {
 	model        interface{}
 }
 
-func migrateLegacyLifeEventParticipantPivots(db *gorm.DB) error {
+func migrateLegacyActivityParticipantPivots(db *gorm.DB) error {
 	migrations := []participantPivotMigration{
-		{tableName: "timeline_event_participants", entityColumn: "timeline_event_id", model: &models.TimelineEventParticipant{}},
-		{tableName: "life_event_participants", entityColumn: "life_event_id", model: &models.LifeEventParticipant{}},
+		{tableName: "activity_participants", entityColumn: "activity_id", model: &models.ActivityParticipant{}},
 	}
 	for _, migration := range migrations {
 		if !db.Migrator().HasTable(migration.tableName) || hasColumn(db, migration.tableName, "id") {

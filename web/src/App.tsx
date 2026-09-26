@@ -1,20 +1,28 @@
 // Orphan pages report (routes with no direct navigation entry in Layout.tsx):
-// - /vaults/:id/settings  (VaultSettings)   — accessed from vault detail page gear icon
 // - /admin/settings, /admin/backups, /admin/oauth-providers — accessed via admin tabs
 // All orphan routes are intentionally secondary pages reachable from their parent views.
 
-import { lazy, Suspense, useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useParams,
+} from "react-router-dom";
 import { Alert, Spin } from "antd";
-import { AuthProvider, ProtectedRoute } from "@/stores/auth";
+import { useQuery } from "@tanstack/react-query";
+import { AuthProvider, ProtectedRoute, useAuth } from "@/stores/auth";
 import Layout from "@/components/Layout";
-import { httpClient } from "@/api";
+import { api, httpClient } from "@/api";
 
 // Auth pages
 const Login = lazy(() => import("@/pages/auth/Login"));
 const Register = lazy(() => import("@/pages/auth/Register"));
 const VerifyEmail = lazy(() => import("@/pages/auth/VerifyEmail"));
 const TwoFactorVerify = lazy(() => import("@/pages/auth/TwoFactorVerify"));
+const SetPassword = lazy(() => import("@/pages/auth/SetPassword"));
+const ConfirmEmailChange = lazy(() => import("@/pages/auth/ConfirmEmailChange"));
 
 // Vault pages
 const VaultList = lazy(() => import("@/pages/vault/VaultList"));
@@ -30,14 +38,12 @@ const VaultFiles = lazy(() => import("@/pages/vault/VaultFiles"));
 const VaultCalendar = lazy(() => import("@/pages/vault/VaultCalendar"));
 const VaultReports = lazy(() => import("@/pages/vault/VaultReports"));
 const VaultFeed = lazy(() => import("@/pages/vault/VaultFeed"));
+const VaultGraph = lazy(() => import("@/pages/vault/VaultGraph"));
 const VaultSettings = lazy(() => import("@/pages/vault/VaultSettings"));
 const VaultReminders = lazy(() => import("@/pages/vault/VaultReminders"));
-const DavSubscriptions = lazy(
-  () => import("@/pages/vault/DavSubscriptions")
-);
-const VaultLifeMetrics = lazy(
-  () => import("@/pages/vault/VaultLifeMetrics")
-);
+const DavSubscriptions = lazy(() => import("@/pages/vault/DavSubscriptions"));
+const VaultLifeMetrics = lazy(() => import("@/pages/vault/VaultLifeMetrics"));
+const ActivityDetail = lazy(() => import("@/pages/vault/ActivityDetail"));
 
 // Contact pages
 const ContactList = lazy(() => import("@/pages/contact/ContactList"));
@@ -83,6 +89,30 @@ function PageLoader() {
   );
 }
 
+function VaultManagerRoute({ children }: { children: ReactNode }) {
+  const { id } = useParams<{ id: string }>();
+  const { data: vault, isLoading } = useQuery({
+    queryKey: ["vaults", id],
+    queryFn: async () => (await api.vaults.vaultsDetail(String(id))).data,
+    enabled: !!id,
+  });
+
+  if (isLoading) return <PageLoader />;
+  if (!id || vault?.current_user_permission !== 100) {
+    return <Navigate to={id ? `/vaults/${id}` : "/vaults"} replace />;
+  }
+  return children;
+}
+
+function AccountAdminRoute({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  return user?.is_admin ? (
+    children
+  ) : (
+    <Navigate to="/settings/preferences" replace />
+  );
+}
+
 export default function App() {
   const [announcement, setAnnouncement] = useState("");
 
@@ -107,91 +137,117 @@ export default function App() {
         )}
         <Suspense fallback={<PageLoader />}>
           <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/login/2fa" element={<TwoFactorVerify />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/accept-invite" element={<AcceptInvite />} />
-          <Route path="/auth/callback" element={<OAuthCallback />} />
-          <Route path="/auth/oauth-link" element={<OAuthLink />} />
-          <Route path="/verify-email" element={<VerifyEmail />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/login/2fa" element={<TwoFactorVerify />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/accept-invite" element={<AcceptInvite />} />
+            <Route path="/set-password" element={<SetPassword />} />
+            <Route path="/confirm-email-change" element={<ConfirmEmailChange />} />
+            <Route path="/auth/callback" element={<OAuthCallback />} />
+            <Route path="/auth/oauth-link" element={<OAuthLink />} />
+            <Route path="/verify-email" element={<VerifyEmail />} />
 
-          <Route
-            element={
-              <ProtectedRoute>
-                <Layout />
-              </ProtectedRoute>
-            }
-          >
-            <Route path="/vaults" element={<VaultList />} />
-            <Route path="/vaults/create" element={<VaultCreate />} />
-            <Route path="/vaults/:id" element={<VaultDetail />} />
-            <Route path="/vaults/:id/contacts" element={<ContactList />} />
             <Route
-              path="/vaults/:id/contacts/create"
-              element={<ContactCreate />}
-            />
-            <Route
-              path="/vaults/:id/contacts/:contactId"
-              element={<ContactDetail />}
-            />
-            <Route path="/vaults/:id/journals" element={<JournalList />} />
-            <Route
-              path="/vaults/:id/journals/:journalId"
-              element={<JournalDetail />}
-            />
-            <Route
-              path="/vaults/:id/journals/:journalId/posts/:postId"
-              element={<PostDetail />}
-            />
-            <Route path="/vaults/:id/groups" element={<GroupList />} />
-            <Route
-              path="/vaults/:id/groups/:groupId"
-              element={<GroupDetail />}
-            />
-            <Route path="/vaults/:id/tasks" element={<VaultTasks />} />
-            <Route path="/vaults/:id/files" element={<VaultFiles />} />
-            <Route path="/vaults/:id/calendar" element={<VaultCalendar />} />
-            <Route path="/vaults/:id/reports" element={<VaultReports />} />
-            <Route path="/vaults/:id/feed" element={<VaultFeed />} />
-            <Route
-              path="/vaults/:id/settings"
-              element={<VaultSettings />}
-            />
-            <Route
-              path="/vaults/:id/reminders"
-              element={<VaultReminders />}
-            />
-            <Route
-              path="/vaults/:id/life-metrics"
-              element={<VaultLifeMetrics />}
-            />
-            <Route
-              path="/vaults/:id/dav-subscriptions"
-              element={<DavSubscriptions />}
-            />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/settings/preferences" element={<Preferences />} />
-            <Route
-              path="/settings/notifications"
-              element={<Notifications />}
-            />
-            <Route path="/settings/personalize" element={<Personalize />} />
-            <Route path="/settings/users" element={<Users />} />
-            <Route path="/settings/2fa" element={<TwoFactor />} />
-            <Route path="/settings/invitations" element={<Invitations />} />
-            <Route path="/settings/webauthn" element={<WebAuthn />} />
-            <Route path="/settings/oauth" element={<OAuthProviders />} />
-            <Route path="/settings/storage" element={<StorageInfo />} />
-            <Route path="/settings/tokens" element={<ApiTokens />} />
-            <Route path="/admin/users" element={<AdminUsers />} />
-            <Route path="/admin/settings" element={<AdminSettings />} />
-            <Route path="/admin/backups" element={<AdminBackups />} />
-            <Route path="/admin/oauth-providers" element={<AdminOAuthProviders />} />
-          </Route>
+              element={
+                <ProtectedRoute>
+                  <Layout />
+                </ProtectedRoute>
+              }
+            >
+              <Route path="/vaults" element={<VaultList />} />
+              <Route path="/vaults/create" element={<VaultCreate />} />
+              <Route path="/vaults/:id" element={<VaultDetail />}>
+                <Route
+                  path="activities/:activityId"
+                  element={<ActivityDetail />}
+                />
+              </Route>
+              <Route path="/vaults/:id/contacts" element={<ContactList />} />
+              <Route
+                path="/vaults/:id/contacts/create"
+                element={<ContactCreate />}
+              />
+              <Route
+                path="/vaults/:id/contacts/:contactId"
+                element={<ContactDetail />}
+              />
+              <Route path="/vaults/:id/journals" element={<JournalList />} />
+              <Route
+                path="/vaults/:id/journals/:journalId"
+                element={<JournalDetail />}
+              />
+              <Route
+                path="/vaults/:id/journals/:journalId/posts/:postId"
+                element={<PostDetail />}
+              />
+              <Route path="/vaults/:id/groups" element={<GroupList />} />
+              <Route
+                path="/vaults/:id/groups/:groupId"
+                element={<GroupDetail />}
+              />
+              <Route path="/vaults/:id/tasks" element={<VaultTasks />} />
+              <Route path="/vaults/:id/files" element={<VaultFiles />} />
+              <Route path="/vaults/:id/calendar" element={<VaultCalendar />} />
+              <Route path="/vaults/:id/graph" element={<VaultGraph />} />
+              <Route path="/vaults/:id/reports" element={<VaultReports />} />
+              <Route path="/vaults/:id/feed" element={<VaultFeed />} />
+              <Route
+                path="/vaults/:id/settings"
+                element={
+                  <VaultManagerRoute>
+                    <VaultSettings />
+                  </VaultManagerRoute>
+                }
+              />
+              <Route
+                path="/vaults/:id/reminders"
+                element={<VaultReminders />}
+              />
+              <Route
+                path="/vaults/:id/life-metrics"
+                element={<VaultLifeMetrics />}
+              />
+              <Route
+                path="/vaults/:id/dav-subscriptions"
+                element={
+                  <VaultManagerRoute>
+                    <DavSubscriptions />
+                  </VaultManagerRoute>
+                }
+              />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/settings/preferences" element={<Preferences />} />
+              <Route
+                path="/settings/notifications"
+                element={<Notifications />}
+              />
+              <Route
+                path="/settings/personalize"
+                element={
+                  <AccountAdminRoute>
+                    <Personalize />
+                  </AccountAdminRoute>
+                }
+              />
+              <Route path="/settings/users" element={<Users />} />
+              <Route path="/settings/2fa" element={<TwoFactor />} />
+              <Route path="/settings/invitations" element={<Invitations />} />
+              <Route path="/settings/webauthn" element={<WebAuthn />} />
+              <Route path="/settings/oauth" element={<OAuthProviders />} />
+              <Route path="/settings/storage" element={<StorageInfo />} />
+              <Route path="/settings/tokens" element={<ApiTokens />} />
+              <Route path="/admin/users" element={<AdminUsers />} />
+              <Route path="/admin/settings" element={<AdminSettings />} />
+              <Route path="/admin/backups" element={<AdminBackups />} />
+              <Route
+                path="/admin/oauth-providers"
+                element={<AdminOAuthProviders />}
+              />
+            </Route>
 
-          <Route path="/" element={<Navigate to="/vaults" replace />} />
-          <Route path="*" element={<Navigate to="/vaults" replace />} />
-        </Routes>
+            <Route path="/" element={<Navigate to="/vaults" replace />} />
+            <Route path="*" element={<Navigate to="/vaults" replace />} />
+          </Routes>
         </Suspense>
       </AuthProvider>
     </BrowserRouter>

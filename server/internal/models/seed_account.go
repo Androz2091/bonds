@@ -25,8 +25,6 @@ func SeedAccountDefaults(tx *gorm.DB, accountID, userID, userEmail, locale strin
 		seedGiftOccasions,
 		seedGiftStates,
 		seedPostTemplates,
-		seedDefaultTemplate,
-		seedDefaultModules,
 		seedAccountCurrencies,
 		seedTaskStatuses,
 	}
@@ -509,162 +507,6 @@ func seedPostTemplates(tx *gorm.DB, accountID, locale string) error {
 	return tx.Create(&inspirational).Error
 }
 
-func seedDefaultTemplate(tx *gorm.DB, accountID, locale string) error {
-	tmplKey := "seed.templates.default_template"
-	tmpl := Template{
-		AccountID:          accountID,
-		Name:               strPtr(i18n.T(locale, tmplKey)),
-		NameTranslationKey: strPtr(tmplKey),
-	}
-	if err := tx.Create(&tmpl).Error; err != nil {
-		return err
-	}
-	if err := tx.Model(&tmpl).Update("can_be_deleted", false).Error; err != nil {
-		return err
-	}
-
-	type pageDef struct {
-		key      string
-		slug     string
-		position int
-		typ      *string
-		undel    bool
-	}
-	pages := []pageDef{
-		{"seed.template_pages.contact_information", "contact", 1, strPtr("contact"), true},
-		{"seed.template_pages.feed", "feed", 2, nil, false},
-		{"seed.template_pages.social", "social", 3, nil, false},
-		{"seed.template_pages.life_and_goals", "life-goals", 4, nil, false},
-		{"seed.template_pages.information", "information", 5, nil, false},
-	}
-
-	for _, p := range pages {
-		pos := p.position
-		page := TemplatePage{
-			TemplateID:         tmpl.ID,
-			Name:               strPtr(i18n.T(locale, p.key)),
-			NameTranslationKey: strPtr(p.key),
-			Slug:               p.slug,
-			Position:           &pos,
-			Type:               p.typ,
-		}
-		if err := tx.Create(&page).Error; err != nil {
-			return err
-		}
-		if p.undel {
-			if err := tx.Model(&page).Update("can_be_deleted", false).Error; err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func seedDefaultModules(tx *gorm.DB, accountID, locale string) error {
-	var tmpl Template
-	if err := tx.Where("account_id = ? AND can_be_deleted = ?", accountID, false).First(&tmpl).Error; err != nil {
-		return err
-	}
-
-	var pages []TemplatePage
-	if err := tx.Where("template_id = ?", tmpl.ID).Order("position ASC").Find(&pages).Error; err != nil {
-		return err
-	}
-
-	pageBySlug := make(map[string]TemplatePage)
-	for _, p := range pages {
-		pageBySlug[p.Slug] = p
-	}
-
-	type moduleDef struct {
-		key                          string
-		typ                          string
-		reservedToContactInformation bool
-	}
-
-	pageModules := map[string][]moduleDef{
-		"contact": {
-			{"seed.modules.avatar", "avatar", true},
-			{"seed.modules.contact_name", "contact_names", true},
-			{"seed.modules.family_summary", "family_summary", true},
-			{"seed.modules.important_dates", "important_dates", true},
-			{"seed.modules.gender_and_pronoun", "gender_pronoun", true},
-			{"seed.modules.labels", "labels", true},
-			// BUG FIX #53: quick_facts module was missing from seed data, causing it to
-			// never appear on the contact detail page's dynamic tabs.
-			{"seed.modules.quick_facts", "quick_facts", true},
-			{"seed.modules.job_information", "company", true},
-			{"seed.modules.religions", "religions", true},
-			{"seed.modules.addresses", "addresses", false},
-			{"seed.modules.contact_information", "contact_information", false},
-		},
-		"feed": {
-			{"seed.modules.contact_feed", "feed", false},
-		},
-		"social": {
-			{"seed.modules.relationships", "relationships", false},
-			{"seed.modules.pets", "pets", false},
-			{"seed.modules.groups", "groups", false},
-		},
-		"life-goals": {
-			{"seed.modules.life_events", "life_events", false},
-			{"seed.modules.goals", "goals", false},
-		},
-		"information": {
-			{"seed.modules.documents", "documents", false},
-			{"seed.modules.photos", "photos", false},
-			{"seed.modules.notes", "notes", false},
-			{"seed.modules.reminders", "reminders", false},
-			{"seed.modules.loans", "loans", false},
-			{"seed.modules.gifts", "gifts", false},
-			{"seed.modules.tasks", "tasks", false},
-			{"seed.modules.calls", "calls", false},
-			{"seed.modules.posts", "posts", false},
-		},
-	}
-
-	var undeletableModuleIDs []uint
-
-	for _, slug := range []string{"contact", "feed", "social", "life-goals", "information"} {
-		page, ok := pageBySlug[slug]
-		if !ok {
-			continue
-		}
-		defs := pageModules[slug]
-		for idx, def := range defs {
-			mod := Module{
-				AccountID:                    accountID,
-				Name:                         strPtr(i18n.T(locale, def.key)),
-				NameTranslationKey:           strPtr(def.key),
-				Type:                         strPtr(def.typ),
-				ReservedToContactInformation: def.reservedToContactInformation,
-			}
-			if err := tx.Create(&mod).Error; err != nil {
-				return err
-			}
-			undeletableModuleIDs = append(undeletableModuleIDs, mod.ID)
-
-			pos := idx + 1
-			pivot := ModuleTemplatePage{
-				TemplatePageID: page.ID,
-				ModuleID:       mod.ID,
-				Position:       intPtr(pos),
-			}
-			if err := tx.Create(&pivot).Error; err != nil {
-				return err
-			}
-		}
-	}
-
-	if len(undeletableModuleIDs) > 0 {
-		if err := tx.Model(&Module{}).Where("id IN ?", undeletableModuleIDs).Update("can_be_deleted", false).Error; err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 func seedNotificationChannel(tx *gorm.DB, userID, userEmail, locale string) error {
 	key := "seed.notification_channel.email_address"
 	now := time.Now()
@@ -680,6 +522,12 @@ func seedNotificationChannel(tx *gorm.DB, userID, userEmail, locale string) erro
 		return err
 	}
 	return tx.Model(&channel).Update("active", true).Error
+}
+
+// SeedUserNotificationChannel initializes per-user notification preferences
+// when a person joins an existing account or a vault by invitation.
+func SeedUserNotificationChannel(tx *gorm.DB, userID, userEmail, locale string) error {
+	return seedNotificationChannel(tx, userID, userEmail, locale)
 }
 
 func seedAccountCurrencies(tx *gorm.DB, accountID, _ string) error {

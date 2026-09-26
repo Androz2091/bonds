@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/middleware"
 	"github.com/naiba/bonds/internal/services"
@@ -32,11 +32,12 @@ func NewContactHandler(contactService *services.ContactService) *ContactHandler 
 //	@Param			search		query		string	false	"Search term"
 //	@Param			sort		query		string	false	"Sort order: first_name, last_name, created_at, first_met_at, updated_at (default)"
 //	@Param			filter		query		string	false	"Filter: active (default), archived, all, favorites, needs_verification"
+//	@Param			company_id	query		integer	false	"Filter by company in this vault"
 //	@Success		200			{object}	response.APIResponse{data=[]dto.ContactResponse}
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts [get]
-func (h *ContactHandler) List(c echo.Context) error {
+func (h *ContactHandler) List(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
 	page, _ := strconv.Atoi(c.QueryParam("page"))
@@ -44,8 +45,16 @@ func (h *ContactHandler) List(c echo.Context) error {
 	search := c.QueryParam("search")
 	sort := c.QueryParam("sort")
 	filter := c.QueryParam("filter")
+	var companyID uint64
+	if raw := c.QueryParam("company_id"); raw != "" {
+		var err error
+		companyID, err = strconv.ParseUint(raw, 10, 64)
+		if err != nil || companyID == 0 {
+			return response.BadRequest(c, "err.invalid_company_id", nil)
+		}
+	}
 
-	contacts, meta, err := h.contactService.ListContacts(vaultID, userID, page, perPage, search, sort, filter)
+	contacts, meta, err := h.contactService.ListContactsWithCompany(vaultID, userID, page, perPage, search, sort, filter, uint(companyID))
 	if err != nil {
 		return response.InternalError(c, "err.failed_to_list_contacts")
 	}
@@ -55,7 +64,7 @@ func (h *ContactHandler) List(c echo.Context) error {
 // ListSelectable godoc
 //
 //	@Summary		List selectable contacts
-//	@Description	Return the full selectable contact set for a vault, excluding shadow contacts and optionally filtering by search term.
+//	@Description	Return the full selectable contact set for a vault, including archived contacts and optionally filtering by search term.
 //	@Tags			contacts
 //	@Produce		json
 //	@Security		BearerAuth
@@ -65,7 +74,7 @@ func (h *ContactHandler) List(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/selectable [get]
-func (h *ContactHandler) ListSelectable(c echo.Context) error {
+func (h *ContactHandler) ListSelectable(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
 	search := c.QueryParam("search")
@@ -89,7 +98,7 @@ func (h *ContactHandler) ListSelectable(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/dashboard/catchUp [get]
-func (h *ContactHandler) ListCatchUpPrompts(c echo.Context) error {
+func (h *ContactHandler) ListCatchUpPrompts(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
 
@@ -118,7 +127,7 @@ func (h *ContactHandler) ListCatchUpPrompts(c echo.Context) error {
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/labels/{labelId} [get]
-func (h *ContactHandler) ListByLabel(c echo.Context) error {
+func (h *ContactHandler) ListByLabel(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
 	labelID, err := strconv.ParseUint(c.Param("labelId"), 10, 64)
@@ -151,10 +160,11 @@ func (h *ContactHandler) ListByLabel(c echo.Context) error {
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		404			{object}	response.APIResponse
+//	@Failure		409			{object}	response.APIResponse
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts [post]
-func (h *ContactHandler) Create(c echo.Context) error {
+func (h *ContactHandler) Create(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
 
@@ -171,11 +181,20 @@ func (h *ContactHandler) Create(c echo.Context) error {
 		if errors.Is(err, services.ErrContactNotFound) {
 			return response.NotFound(c, "err.contact_not_found")
 		}
+		if errors.Is(err, services.ErrContactLayoutNotFound) {
+			return response.NotFound(c, "err.contact_layout_not_found")
+		}
 		if errors.Is(err, services.ErrContactNameRequired) {
 			return response.ValidationError(c, map[string]string{"validation": err.Error()})
 		}
 		if errors.Is(err, services.ErrContactInvalidFirstMetPrecision) || errors.Is(err, services.ErrContactPromotionNotAllowed) {
 			return response.ValidationError(c, map[string]string{"validation": err.Error()})
+		}
+		if errors.Is(err, services.ErrImportantDateLabelRequired) || errors.Is(err, services.ErrImportantDateInvalidPrecision) || errors.Is(err, services.ErrImportantDateTypeNotFound) {
+			return response.BadRequest(c, "err.invalid_important_date", nil)
+		}
+		if errors.Is(err, services.ErrImportantDateSingletonConflict) {
+			return response.Conflict(c, "err.important_date_singleton_conflict")
 		}
 		return response.InternalError(c, "err.failed_to_create_contact")
 	}
@@ -196,7 +215,7 @@ func (h *ContactHandler) Create(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{id} [get]
-func (h *ContactHandler) Get(c echo.Context) error {
+func (h *ContactHandler) Get(c *echo.Context) error {
 	contactID := c.Param("id")
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
@@ -226,10 +245,11 @@ func (h *ContactHandler) Get(c echo.Context) error {
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		401			{object}	response.APIResponse
 //	@Failure		404			{object}	response.APIResponse
+//	@Failure		409			{object}	response.APIResponse
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{id} [put]
-func (h *ContactHandler) Update(c echo.Context) error {
+func (h *ContactHandler) Update(c *echo.Context) error {
 	contactID := c.Param("id")
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
@@ -247,11 +267,23 @@ func (h *ContactHandler) Update(c echo.Context) error {
 		if errors.Is(err, services.ErrContactNotFound) {
 			return response.NotFound(c, "err.contact_not_found")
 		}
+		if errors.Is(err, services.ErrContactLayoutNotFound) {
+			return response.NotFound(c, "err.contact_layout_not_found")
+		}
 		if errors.Is(err, services.ErrContactNameRequired) {
 			return response.ValidationError(c, map[string]string{"validation": err.Error()})
 		}
 		if errors.Is(err, services.ErrContactInvalidFirstMetPrecision) || errors.Is(err, services.ErrContactPromotionNotAllowed) {
 			return response.ValidationError(c, map[string]string{"validation": err.Error()})
+		}
+		if errors.Is(err, services.ErrImportantDateNotFound) {
+			return response.NotFound(c, "err.important_date_not_found")
+		}
+		if errors.Is(err, services.ErrImportantDateLabelRequired) || errors.Is(err, services.ErrImportantDateInvalidPrecision) || errors.Is(err, services.ErrImportantDateTypeNotFound) {
+			return response.BadRequest(c, "err.invalid_important_date", nil)
+		}
+		if errors.Is(err, services.ErrImportantDateSingletonConflict) {
+			return response.Conflict(c, "err.important_date_singleton_conflict")
 		}
 		return response.InternalError(c, "err.failed_to_update_contact")
 	}
@@ -272,7 +304,7 @@ func (h *ContactHandler) Update(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{contact_id}/catchUp [post]
-func (h *ContactHandler) MarkCaughtUp(c echo.Context) error {
+func (h *ContactHandler) MarkCaughtUp(c *echo.Context) error {
 	contactID := c.Param("contact_id")
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
@@ -301,16 +333,67 @@ func (h *ContactHandler) MarkCaughtUp(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{id} [delete]
-func (h *ContactHandler) Delete(c echo.Context) error {
+func (h *ContactHandler) Delete(c *echo.Context) error {
 	contactID := c.Param("id")
 	vaultID := c.Param("vault_id")
 	if err := h.contactService.DeleteContact(contactID, vaultID); err != nil {
 		if errors.Is(err, services.ErrContactNotFound) {
 			return response.NotFound(c, "err.contact_not_found")
 		}
+		if errors.Is(err, services.ErrContactCannotBeDeleted) {
+			return response.Conflict(c, "err.contact_cannot_be_deleted")
+		}
 		return response.InternalError(c, "err.failed_to_delete_contact")
 	}
 	return response.NoContent(c)
+}
+
+// DeleteMany godoc
+//
+//	@Summary		Delete multiple contacts
+//	@ID				ContactsBulkDelete
+//	@Description	Permanently delete multiple contacts in a single transaction
+//	@Tags			contacts
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			vault_id	path		string						true	"Vault ID"
+//	@Param			request		body		dto.BulkDeleteContactsRequest	true	"Contacts to delete"
+//	@Success		200			{object}	response.APIResponse{data=dto.BulkDeleteContactsResponse}
+//	@Failure		400			{object}	response.APIResponse
+//	@Failure		401			{object}	response.APIResponse
+//	@Failure		403			{object}	response.APIResponse
+//	@Failure		404			{object}	response.APIResponse
+//	@Failure		409			{object}	response.APIResponse
+//	@Failure		422			{object}	response.APIResponse
+//	@Failure		500			{object}	response.APIResponse
+//	@Router			/vaults/{vault_id}/contacts [delete]
+func (h *ContactHandler) DeleteMany(c *echo.Context) error {
+	vaultID := c.Param("vault_id")
+	var req dto.BulkDeleteContactsRequest
+	if err := c.Bind(&req); err != nil {
+		return response.BadRequest(c, "err.invalid_request_body", nil)
+	}
+	if err := validateRequest(req); err != nil {
+		return response.ValidationError(c, map[string]string{"validation": err.Error()})
+	}
+
+	result, err := h.contactService.DeleteContacts(req.ContactIDs, vaultID)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrContactDeleteEmpty),
+			errors.Is(err, services.ErrContactIDInvalid),
+			errors.Is(err, services.ErrContactIDsLimitExceeded):
+			return response.ValidationError(c, map[string]string{"contact_ids": "contact_ids is invalid"})
+		case errors.Is(err, services.ErrContactNotFound):
+			return response.NotFound(c, "err.contact_not_found")
+		case errors.Is(err, services.ErrContactCannotBeDeleted):
+			return response.Conflict(c, "err.contact_cannot_be_deleted")
+		default:
+			return response.InternalError(c, "err.failed_to_delete_contact")
+		}
+	}
+	return response.OK(c, result)
 }
 
 // ToggleArchive godoc
@@ -327,7 +410,7 @@ func (h *ContactHandler) Delete(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{id}/archive [put]
-func (h *ContactHandler) ToggleArchive(c echo.Context) error {
+func (h *ContactHandler) ToggleArchive(c *echo.Context) error {
 	contactID := c.Param("id")
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
@@ -335,6 +418,9 @@ func (h *ContactHandler) ToggleArchive(c echo.Context) error {
 	if err != nil {
 		if errors.Is(err, services.ErrContactNotFound) {
 			return response.NotFound(c, "err.contact_not_found")
+		}
+		if errors.Is(err, services.ErrContactCannotBeDeleted) {
+			return response.Conflict(c, "err.contact_cannot_be_deleted")
 		}
 		return response.InternalError(c, "err.failed_to_toggle_archive")
 	}
@@ -355,7 +441,7 @@ func (h *ContactHandler) ToggleArchive(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{id}/favorite [put]
-func (h *ContactHandler) ToggleFavorite(c echo.Context) error {
+func (h *ContactHandler) ToggleFavorite(c *echo.Context) error {
 	contactID := c.Param("id")
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
@@ -386,7 +472,7 @@ func (h *ContactHandler) ToggleFavorite(c echo.Context) error {
 //	@Failure		422			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/search/contacts [post]
-func (h *ContactHandler) QuickSearch(c echo.Context) error {
+func (h *ContactHandler) QuickSearch(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
 

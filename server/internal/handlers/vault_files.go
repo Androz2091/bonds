@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/middleware"
 	"github.com/naiba/bonds/internal/services"
@@ -57,7 +56,7 @@ func NewVaultFileHandler(vaultFileService *services.VaultFileService, storageInf
 //	@Success		200			{object}	response.APIResponse{data=[]dto.VaultFileResponse}
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/files [get]
-func (h *VaultFileHandler) List(c echo.Context) error {
+func (h *VaultFileHandler) List(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	files, err := h.vaultFileService.List(vaultID)
 	if err != nil {
@@ -80,7 +79,7 @@ func (h *VaultFileHandler) List(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/files/{id} [delete]
-func (h *VaultFileHandler) Delete(c echo.Context) error {
+func (h *VaultFileHandler) Delete(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -91,7 +90,7 @@ func (h *VaultFileHandler) Delete(c echo.Context) error {
 			return response.NotFound(c, "err.file_not_found")
 		}
 		if errors.Is(err, services.ErrFileInUse) {
-			return response.BadRequest(c, "err.file_referenced_by_quick_fact", nil)
+			return response.BadRequest(c, "err.file_in_use", nil)
 		}
 		return response.InternalError(c, "err.failed_to_delete_file")
 	}
@@ -114,7 +113,7 @@ func (h *VaultFileHandler) Delete(c echo.Context) error {
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/files [post]
-func (h *VaultFileHandler) Upload(c echo.Context) error {
+func (h *VaultFileHandler) Upload(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	contactID := c.FormValue("contact_id")
 	fileType := c.FormValue("file_type")
@@ -140,7 +139,7 @@ func (h *VaultFileHandler) Upload(c echo.Context) error {
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{contact_id}/photos [post]
-func (h *VaultFileHandler) UploadContactFile(c echo.Context) error {
+func (h *VaultFileHandler) UploadContactFile(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	contactID := c.Param("contact_id")
 
@@ -205,7 +204,7 @@ func verifyUploadedMediaContent(src interface {
 	return uploadMediaMimeMatches(mimeType, sniffBuffer[:n]), nil
 }
 
-func (h *VaultFileHandler) handleUpload(c echo.Context, vaultID, contactID, fileType string) error {
+func (h *VaultFileHandler) handleUpload(c *echo.Context, vaultID, contactID, fileType string) error {
 	fileHeader, err := c.FormFile("file")
 	if err != nil {
 		return response.BadRequest(c, "err.file_required", nil)
@@ -227,7 +226,7 @@ func (h *VaultFileHandler) handleUpload(c echo.Context, vaultID, contactID, file
 	}
 
 	// 检查账户存储配额。limit_bytes=0 表示无限制。
-	accountID := middleware.GetAccountID(c)
+	accountID := middleware.GetVaultAccountID(c)
 	storageInfo, err := h.storageInfoService.Get(accountID)
 	if err == nil && storageInfo.LimitBytes > 0 {
 		if storageInfo.UsedBytes+fileHeader.Size > storageInfo.LimitBytes {
@@ -289,14 +288,14 @@ func (h *VaultFileHandler) handleUpload(c echo.Context, vaultID, contactID, file
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/files/{id}/download [get]
-func (h *VaultFileHandler) Serve(c echo.Context) error {
+func (h *VaultFileHandler) Serve(c *echo.Context) error {
 	vaultID := c.Param("vault_id")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		return response.BadRequest(c, "err.invalid_file_id", nil)
 	}
 
-	file, err := h.vaultFileService.Get(uint(id), vaultID)
+	file, filePath, err := h.vaultFileService.ResolvePath(uint(id), vaultID)
 	if err != nil {
 		if errors.Is(err, services.ErrFileNotFound) {
 			return response.NotFound(c, "err.file_not_found")
@@ -304,11 +303,10 @@ func (h *VaultFileHandler) Serve(c echo.Context) error {
 		return response.InternalError(c, "err.failed_to_get_file")
 	}
 
-	filePath := filepath.Join(h.vaultFileService.UploadDir(), file.UUID)
 	c.Response().Header().Set("X-Content-Type-Options", "nosniff")
 	if c.QueryParam("preview") == "true" && (strings.HasPrefix(file.MimeType, "image/") || strings.HasPrefix(file.MimeType, "video/")) {
 		c.Response().Header().Set(echo.HeaderContentType, file.MimeType)
-		return c.Inline(filePath, file.Name)
+		return serveLocalFileWithDisposition(c, filePath, file.Name, "inline")
 	}
-	return c.Attachment(filePath, file.Name)
+	return serveLocalFileWithDisposition(c, filePath, file.Name, "attachment")
 }

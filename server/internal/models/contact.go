@@ -1,11 +1,15 @@
 package models
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+var ErrContactTemplateOutsideVault = errors.New("contact template must belong to the contact vault")
 
 type Contact struct {
 	ID                       string         `json:"id" gorm:"primaryKey;type:text"`
@@ -48,11 +52,10 @@ type Contact struct {
 	CreatedAt                time.Time      `json:"created_at"`
 	UpdatedAt                time.Time      `json:"updated_at"`
 
-	Vault    Vault     `json:"vault,omitempty" gorm:"foreignKey:VaultID"`
-	Gender   *Gender   `json:"gender,omitempty" gorm:"foreignKey:GenderID"`
-	Pronoun  *Pronoun  `json:"pronoun,omitempty" gorm:"foreignKey:PronounID"`
-	Template *Template `json:"template,omitempty" gorm:"foreignKey:TemplateID"`
-	Company  *Company  `json:"company,omitempty" gorm:"foreignKey:CompanyID"`
+	Vault   Vault    `json:"vault,omitempty" gorm:"foreignKey:VaultID"`
+	Gender  *Gender  `json:"gender,omitempty" gorm:"foreignKey:GenderID"`
+	Pronoun *Pronoun `json:"pronoun,omitempty" gorm:"foreignKey:PronounID"`
+	Company *Company `json:"company,omitempty" gorm:"foreignKey:CompanyID"`
 	// Optional self-reference is cleaned on soft and hard deletes to avoid stale meeting metadata.
 	FirstMetThrough     *Contact               `json:"first_met_through,omitempty" gorm:"foreignKey:FirstMetThroughContactID;references:ID;constraint:-"`
 	File                *File                  `json:"file,omitempty" gorm:"foreignKey:FileID"`
@@ -68,9 +71,7 @@ type Contact struct {
 	Goals               []Goal                 `json:"goals,omitempty" gorm:"foreignKey:ContactID"`
 	Groups              []Group                `json:"groups,omitempty" gorm:"many2many:contact_group"`
 	Posts               []Post                 `json:"posts,omitempty" gorm:"many2many:contact_post"`
-	LifeEvents          []LifeEvent            `json:"life_events,omitempty" gorm:"many2many:life_event_participants"`
-	TimelineEvents      []TimelineEvent        `json:"timeline_events,omitempty" gorm:"many2many:timeline_event_participants"`
-	MoodTrackingEvents  []MoodTrackingEvent    `json:"mood_tracking_events,omitempty" gorm:"foreignKey:ContactID"`
+	Activities          []Activity             `json:"activities,omitempty" gorm:"many2many:activity_participants"`
 	Addresses           []Address              `json:"addresses,omitempty" gorm:"many2many:contact_address"`
 	QuickFacts          []QuickFact            `json:"quick_facts,omitempty" gorm:"foreignKey:ContactID"`
 	// LifeMetrics relation removed: pivot table now used as event log, not a static association
@@ -80,6 +81,22 @@ type Contact struct {
 func (c *Contact) BeforeCreate(tx *gorm.DB) error {
 	if c.ID == "" {
 		c.ID = uuid.New().String()
+	}
+	return nil
+}
+
+func (c *Contact) BeforeSave(tx *gorm.DB) error {
+	if c.TemplateID == nil || c.VaultID == "" || !tx.Migrator().HasTable(&VaultContactTemplate{}) {
+		return nil
+	}
+	var count int64
+	if err := tx.Model(&VaultContactTemplate{}).
+		Where("id = ? AND vault_id = ?", *c.TemplateID, c.VaultID).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("%w: template %d, vault %s", ErrContactTemplateOutsideVault, *c.TemplateID, c.VaultID)
 	}
 	return nil
 }

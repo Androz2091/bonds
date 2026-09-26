@@ -15,7 +15,7 @@ cp server/.env.example server/.env
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEBUG` | `false` | Enable debug mode: request logging, SQL logging, Swagger UI (default on) |
-| `JWT_SECRET` | — | **Required in production.** Signing key for auth tokens |
+| `JWT_SECRET` | — | **Required in production.** Generate a 256-bit key with `openssl rand -hex 32`, then persist and reuse it across restarts. |
 | `SETTINGS_ENC_KEY` | _(empty)_ | Optional. Enables AES-256-GCM encryption-at-rest for sensitive system settings (SMTP password, OAuth client secrets, geocoding API keys). See [Encrypting Sensitive Settings](#encrypting-sensitive-settings) below. |
 | `SERVER_PORT` | `8080` | Port the server listens on |
 | `SERVER_HOST` | `0.0.0.0` | Host address the server binds to |
@@ -57,13 +57,15 @@ Most application settings are configured through the **Admin Settings** panel, a
 - **OIDC**: OpenID Connect provider for SSO (Authentik, Keycloak, etc.).
 - **WebAuthn**: Relying Party configuration for passkey authentication.
 - **Telegram**: Bot token for Telegram notifications.
-- **Geocoding**: Provider and API key for address geocoding.
+- **Geocoding**: Active provider, privacy precision, per-provider credentials, and self-hosted Photon URL.
 - **Storage**: Max upload size for files and documents (configured inside UI, not via env vars).
 - **Backup**: Cron schedule, retention period for automatic backups.
 - **Swagger**: Enable or disable API documentation UI independently of debug mode.
 
 ::: tip Migration from Environment Variables
 On first startup, Bonds seeds these admin settings from environment variables if present. After that, all changes are made through the admin panel. Environment variables for these settings are only used as initial seed values.
+
+Geocoding provider credentials and self-hosted URLs are configured only through the admin panel; they are not imported from a generic environment API key.
 :::
 
 ## Encrypting Sensitive Settings
@@ -89,7 +91,8 @@ Currently encrypted at rest when the key is set:
 
 | Field | Storage |
 |-------|---------|
-| `system_settings.value` for `smtp.password`, `geocoding.api_key`, and any `secret.*` key | AES-256-GCM |
+| `system_settings.value` for `smtp.password` and any `secret.*` key | AES-256-GCM |
+| `geocoding_provider_configs.config` (one structured config per provider) | AES-256-GCM |
 | `oauth_providers.client_secret` (GitHub, Google, GitLab, Discord, OIDC) | AES-256-GCM |
 
 ::: warning Losing the key
@@ -98,7 +101,7 @@ If you set `SETTINGS_ENC_KEY` and then lose it, encrypted secrets are unrecovera
 
 ## Production Checklist
 
-1. **Set `JWT_SECRET`**: Use a strong, random string (32+ characters).
+1. **Set `JWT_SECRET`**: Run `export JWT_SECRET="$(openssl rand -hex 32)"` once, store the 256-bit value in a protected environment or secret store, and reuse it across restarts. Plan rotation: it invalidates existing sessions and can require DAV subscription credentials to be entered again because their encryption derives from this secret.
 2. **Set `SETTINGS_ENC_KEY`**: Recommended for production. Encrypts SMTP/OAuth/geocoding credentials at rest.
 3. **Set `APP_ENV=production`**: Disables debug features.
 4. **Set `APP_URL`**: Your public URL, used in emails and OAuth callbacks.
@@ -115,8 +118,8 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - JWT_SECRET=change-me-to-a-random-string
-      - SETTINGS_ENC_KEY=change-me-to-another-random-string
+      - JWT_SECRET=${JWT_SECRET:?Set a persisted 256-bit JWT secret before startup}
+      - SETTINGS_ENC_KEY=${SETTINGS_ENC_KEY:?Set a persisted settings encryption key before startup}
       - APP_ENV=production
       - APP_URL=https://bonds.example.com
       - DB_DSN=/data/bonds.db

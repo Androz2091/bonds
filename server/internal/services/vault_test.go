@@ -66,9 +66,9 @@ func TestCreateVault(t *testing.T) {
 	}
 
 	var catCount int64
-	db.Model(&models.LifeEventCategory{}).Where("vault_id = ?", vault.ID).Count(&catCount)
-	if catCount != 4 {
-		t.Errorf("expected 4 LifeEventCategories, got %d", catCount)
+	db.Model(&models.ActivityCategory{}).Where("vault_id = ?", vault.ID).Count(&catCount)
+	if catCount != 9 {
+		t.Errorf("expected 9 ActivityCategories, got %d", catCount)
 	}
 
 	var qfCount int64
@@ -151,7 +151,7 @@ func TestGetVault_ReturnsNavigationTabVisibility(t *testing.T) {
 	}
 }
 
-func TestCreateVault_UserContactAutoCreated(t *testing.T) {
+func TestCreateVault_DoesNotCreateAContactForUser(t *testing.T) {
 	svc, accountID, userID := setupVaultTest(t)
 
 	vault, err := svc.CreateVault(accountID, userID, dto.CreateVaultRequest{
@@ -161,33 +161,16 @@ func TestCreateVault_UserContactAutoCreated(t *testing.T) {
 		t.Fatalf("CreateVault failed: %v", err)
 	}
 
-	if vault.UserContactID == "" {
-		t.Fatal("Expected UserContactID to be populated after vault creation")
-	}
-
 	var uv models.UserVault
 	if err := svc.db.Where("user_id = ? AND vault_id = ?", userID, vault.ID).First(&uv).Error; err != nil {
 		t.Fatalf("UserVault lookup failed: %v", err)
 	}
-	if uv.ContactID == "" {
-		t.Fatal("Expected UserVault.ContactID to be set")
+	var contactCount int64
+	if err := svc.db.Model(&models.Contact{}).Where("vault_id = ?", vault.ID).Count(&contactCount).Error; err != nil {
+		t.Fatalf("Count contacts failed: %v", err)
 	}
-	if uv.ContactID != vault.UserContactID {
-		t.Errorf("UserVault.ContactID (%s) != VaultResponse.UserContactID (%s)", uv.ContactID, vault.UserContactID)
-	}
-
-	var contact models.Contact
-	if err := svc.db.First(&contact, "id = ?", uv.ContactID).Error; err != nil {
-		t.Fatalf("Self-contact lookup failed: %v", err)
-	}
-	if contact.CanBeDeleted {
-		t.Error("Self-contact should have CanBeDeleted=false")
-	}
-	if contact.Listed {
-		t.Error("Self-contact should have Listed=false")
-	}
-	if contact.VaultID != vault.ID {
-		t.Errorf("Self-contact VaultID = %s, want %s", contact.VaultID, vault.ID)
+	if contactCount != 0 {
+		t.Fatalf("vault creation created %d contact(s), want 0", contactCount)
 	}
 }
 
@@ -414,7 +397,7 @@ func TestDeleteVault_CleanupCompleteness(t *testing.T) {
 	vaultTables := []tableCheck{
 		{"ContactImportantDateType", &models.ContactImportantDateType{}},
 		{"MoodTrackingParameter", &models.MoodTrackingParameter{}},
-		{"LifeEventCategory", &models.LifeEventCategory{}},
+		{"ActivityCategory", &models.ActivityCategory{}},
 		{"VaultQuickFactsTemplate", &models.VaultQuickFactsTemplate{}},
 		{"Label", &models.Label{}},
 		{"Company", &models.Company{}},
@@ -427,7 +410,6 @@ func TestDeleteVault_CleanupCompleteness(t *testing.T) {
 		{"Note", &models.Note{}},
 		{"ContactTask", &models.ContactTask{}},
 		{"Journal", &models.Journal{}},
-		{"TimelineEvent", &models.TimelineEvent{}},
 		{"ContactVaultUser", &models.ContactVaultUser{}},
 		{"UserVault", &models.UserVault{}},
 	}
@@ -533,6 +515,65 @@ func TestDeleteVault_WithForeignKeysEnabled(t *testing.T) {
 	_, err = vaultSvc.GetVault(vault.ID, resp.User.ID)
 	if err != ErrVaultNotFound {
 		t.Errorf("Expected ErrVaultNotFound after deletion, got %v", err)
+	}
+}
+
+func TestVaultService_DeleteVault_cleansSelectedReminderRecipients_whenForeignKeysEnabled(t *testing.T) {
+	// Given
+	db := testutil.SetupTestDBWithFKConstraints(t)
+	authSvc := NewAuthService(db, testutil.TestJWTConfig())
+	registration, err := authSvc.Register(dto.RegisterRequest{
+		FirstName: "Reminder",
+		LastName:  "Recipient",
+		Email:     "vault-reminder-recipient@example.com",
+		Password:  "password123",
+	}, "en")
+	if err != nil {
+		t.Fatalf("register user: %v", err)
+	}
+
+	vaultSvc := NewVaultService(db)
+	vault, err := vaultSvc.CreateVault(registration.User.AccountID, registration.User.ID, dto.CreateVaultRequest{
+		Name: "Selected reminder recipient vault",
+	}, "en")
+	if err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+	contact := models.Contact{VaultID: vault.ID, FirstName: strPtrOrNil("Recipient contact")}
+	if err := db.Create(&contact).Error; err != nil {
+		t.Fatalf("create contact: %v", err)
+	}
+	reminder := models.ContactReminder{
+		ContactID: contact.ID,
+		Label:     "Selected recipient reminder",
+		Type:      "one_time",
+		Audience:  models.ReminderAudienceSelectedUsers,
+	}
+	if err := db.Create(&reminder).Error; err != nil {
+		t.Fatalf("create selected-users reminder: %v", err)
+	}
+	if err := db.Create(&models.ContactReminderSelectedUser{
+		ContactReminderID: reminder.ID,
+		UserID:            registration.User.ID,
+	}).Error; err != nil {
+		t.Fatalf("create selected reminder recipient: %v", err)
+	}
+
+	// When
+	err = vaultSvc.DeleteVault(vault.ID)
+
+	// Then
+	if err != nil {
+		t.Fatalf("delete vault with selected reminder recipient: %v", err)
+	}
+	var recipientCount int64
+	if err := db.Model(&models.ContactReminderSelectedUser{}).
+		Where("contact_reminder_id = ?", reminder.ID).
+		Count(&recipientCount).Error; err != nil {
+		t.Fatalf("count selected reminder recipients: %v", err)
+	}
+	if recipientCount != 0 {
+		t.Fatalf("selected reminder recipients = %d, want 0", recipientCount)
 	}
 }
 

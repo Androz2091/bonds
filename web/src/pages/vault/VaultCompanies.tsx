@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { formatContactName, useVaultNameOrder } from "@/utils/nameFormat";
+import { formatContactName, useNameOrder } from "@/utils/nameFormat";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -20,6 +20,7 @@ import {
   List,
   Empty,
   Popconfirm,
+  Grid,
 } from "antd";
 import {
   BankOutlined,
@@ -44,7 +45,8 @@ export default function VaultCompanies({ vaultId }: { vaultId: string }) {
   const queryClient = useQueryClient();
   const { token } = theme.useToken();
   const { message } = App.useApp();
-  const nameOrder = useVaultNameOrder(vaultId);
+  const screens = Grid.useBreakpoint();
+  const nameOrder = useNameOrder();
   const [form] = Form.useForm();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
@@ -314,7 +316,7 @@ export default function VaultCompanies({ vaultId }: { vaultId: string }) {
         placement="right"
         onClose={() => setSelectedCompany(null)}
         open={!!selectedCompany}
-        width={500}
+        size={screens.md ? 500 : "100%"}
       >
         {selectedCompany && (
             <>

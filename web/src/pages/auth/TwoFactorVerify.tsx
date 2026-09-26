@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, Navigate, Link } from "react-router-dom";
+import { useNavigate, useLocation, Navigate, Link } from "react-router-dom";
 import { Form, Input, Button, Typography, App, theme, Card } from "antd";
 import { SafetyOutlined, LockOutlined } from "@ant-design/icons";
 import { useAuth } from "@/stores/auth";
@@ -15,6 +15,7 @@ export default function TwoFactorVerify() {
   const [verified, setVerified] = useState(false);
   const { twoFactorPending, tempToken, verifyTwoFactor, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const { message } = App.useApp();
   const { t } = useTranslation();
   const { token: colorToken } = theme.useToken();
@@ -26,9 +27,22 @@ export default function TwoFactorVerify() {
   async function onFinish(values: { code: string }) {
     setLoading(true);
     try {
-      await verifyTwoFactor(values.code);
-      setVerified(true);
-      navigate("/vaults", { replace: true });
+      const completion = await verifyTwoFactor(values.code);
+      switch (completion.status) {
+        case "authenticated": {
+          setVerified(true);
+          const redirect = (location.state as { redirect?: string } | null)?.redirect;
+          navigate(redirect?.startsWith("/") && !redirect.startsWith("//") ? redirect : "/vaults", { replace: true });
+          return;
+        }
+        case "two_factor_required":
+        case "stale":
+          return;
+        default: {
+          const exhaustiveCompletion: never = completion;
+          return exhaustiveCompletion;
+        }
+      }
     } catch (err) {
       const apiErr = err as APIError;
       message.error(apiErr.message || t("auth.two_factor_verify.failed"));

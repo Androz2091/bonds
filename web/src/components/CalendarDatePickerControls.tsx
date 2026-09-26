@@ -1,4 +1,4 @@
-import { Segmented, Select, Space } from "antd";
+import { Button, Segmented, Select, Space } from "antd";
 import type { ImportantDatePrecision } from "./calendarDatePickerValue";
 
 type SelectOption = {
@@ -7,13 +7,13 @@ type SelectOption = {
 };
 
 interface CalendarDatePickerControlsProps {
-	readonly showPrecisionSelector: boolean;
-	readonly availablePrecisions: readonly ImportantDatePrecision[];
-	readonly usesPrecisionLayout: boolean;
-	readonly datePrecision: ImportantDatePrecision;
-  readonly displayYear: number | null;
-  readonly selectedMonth: number;
-  readonly selectedDay: number;
+  readonly showPrecisionSelector: boolean;
+  readonly availablePrecisions: readonly ImportantDatePrecision[];
+  readonly usesPrecisionLayout: boolean;
+  readonly datePrecision: ImportantDatePrecision;
+  readonly displayYear: number | null | undefined;
+  readonly selectedMonth: number | undefined;
+  readonly selectedDay: number | undefined;
   readonly yearOptions: SelectOption[];
   readonly monthOptions: SelectOption[];
   readonly dayOptions: SelectOption[];
@@ -21,6 +21,8 @@ interface CalendarDatePickerControlsProps {
   readonly yearPlaceholder: string;
   readonly monthPlaceholder: string;
   readonly dayPlaceholder: string;
+  readonly showToday: boolean;
+  readonly todayLabel: string;
   readonly precisionLabels: {
     readonly full: string;
     readonly month: string;
@@ -31,12 +33,13 @@ interface CalendarDatePickerControlsProps {
   readonly onYearChange: (value: number) => void;
   readonly onMonthChange: (value: number) => void;
   readonly onDayChange: (value: number) => void;
+  readonly onToday: () => void;
 }
 
 export default function CalendarDatePickerControls({
-	showPrecisionSelector,
-	availablePrecisions,
-	usesPrecisionLayout,
+  showPrecisionSelector,
+  availablePrecisions,
+  usesPrecisionLayout,
   datePrecision,
   displayYear,
   selectedMonth,
@@ -48,29 +51,33 @@ export default function CalendarDatePickerControls({
   yearPlaceholder,
   monthPlaceholder,
   dayPlaceholder,
+  showToday,
+  todayLabel,
   precisionLabels,
   onPrecisionChange,
   onYearChange,
   onMonthChange,
   onDayChange,
+  onToday,
 }: CalendarDatePickerControlsProps) {
-	return (
-		<>
-		  {showPrecisionSelector && (
-			<Segmented
-			  options={availablePrecisions.map((precision) => ({
-				value: precision,
-				label: precision === "full"
-					? precisionLabels.full
-					: precision === "month"
-						? precisionLabels.month
-						: precision === "year"
-							? precisionLabels.year
-							: precisionLabels.monthDay,
-			  }))}
-			  value={datePrecision}
-			  onChange={onPrecisionChange}
-			  style={{ marginBottom: 8 }}
+  return (
+    <>
+      {showPrecisionSelector && (
+        <Segmented
+          options={availablePrecisions.map((precision) => ({
+            value: precision,
+            label:
+              precision === "full"
+                ? precisionLabels.full
+                : precision === "month"
+                  ? precisionLabels.month
+                  : precision === "year"
+                    ? precisionLabels.year
+                    : precisionLabels.monthDay,
+          }))}
+          value={datePrecision}
+          onChange={onPrecisionChange}
+          style={{ marginBottom: 8 }}
           block
         />
       )}
@@ -95,7 +102,9 @@ export default function CalendarDatePickerControls({
             placeholder={monthPlaceholder}
           />
         )}
-        {(!usesPrecisionLayout || datePrecision === "full" || datePrecision === "month_day") && (
+        {(!usesPrecisionLayout ||
+          datePrecision === "full" ||
+          datePrecision === "month_day") && (
           <Select
             value={selectedDay}
             onChange={onDayChange}
@@ -105,6 +114,16 @@ export default function CalendarDatePickerControls({
           />
         )}
       </Space.Compact>
+      {showToday && (
+        <Button
+          type="link"
+          size="small"
+          onClick={onToday}
+          style={{ paddingInline: 0 }}
+        >
+          {todayLabel}
+        </Button>
+      )}
     </>
   );
 }

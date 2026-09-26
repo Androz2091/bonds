@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/naiba/bonds/internal/models"
 	"github.com/naiba/bonds/pkg/response"
 	"gorm.io/gorm"
@@ -19,6 +19,7 @@ type JWTClaims struct {
 	Email            string `json:"email"`
 	IsAdmin          bool   `json:"is_admin"`
 	IsInstanceAdmin  bool   `json:"is_instance_admin"`
+	AuthVersion      uint   `json:"auth_version,omitempty"`
 	TwoFactorPending bool   `json:"two_factor_pending,omitempty"`
 	jwt.RegisteredClaims
 }
@@ -37,12 +38,12 @@ const patPrefix = "bonds_"
 const ScopeCalendarRead = "calendar:read"
 
 const (
-	ctxPATScopes  = "pat_scopes"
+	ctxPATScopes   = "pat_scopes"
 	ctxIsScopedPAT = "is_scoped_pat"
 )
 
 func (m *AuthMiddleware) Authenticate(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		var tokenString string
 
 		authHeader := c.Request().Header.Get("Authorization")
@@ -65,7 +66,7 @@ func (m *AuthMiddleware) Authenticate(next echo.HandlerFunc) echo.HandlerFunc {
 	}
 }
 
-func (m *AuthMiddleware) authenticateWithJWT(c echo.Context, next echo.HandlerFunc, tokenString string) error {
+func (m *AuthMiddleware) authenticateWithJWT(c *echo.Context, next echo.HandlerFunc, tokenString string) error {
 	claims := &JWTClaims{}
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -85,7 +86,7 @@ func (m *AuthMiddleware) authenticateWithJWT(c echo.Context, next echo.HandlerFu
 	}
 
 	user := &models.User{}
-	if err := m.db.Select("disabled, email_verified_at").Where("id = ?", claims.UserID).First(user).Error; err != nil {
+	if err := m.db.Select("id, account_id, email, disabled, auth_version, email_verified_at, is_account_administrator, is_instance_administrator").Where("id = ?", claims.UserID).First(user).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return response.Unauthorized(c, "err.user_not_found")
 		}
@@ -94,19 +95,30 @@ func (m *AuthMiddleware) authenticateWithJWT(c echo.Context, next echo.HandlerFu
 	if user.Disabled {
 		return response.Forbidden(c, "err.user_account_disabled")
 	}
+	if user.AuthVersion != claims.AuthVersion {
+		return response.Unauthorized(c, "err.invalid_or_expired_token")
+	}
+	admin, ok, err := accountMembershipAdmin(m.db, user, claims.AccountID)
+	if err != nil {
+		return response.InternalError(c, "err.database_error")
+	}
+	if !ok {
+		return response.Unauthorized(c, "err.invalid_or_expired_token")
+	}
 
 	c.Set("user_id", claims.UserID)
 	c.Set("account_id", claims.AccountID)
-	c.Set("email", claims.Email)
-	c.Set("is_admin", claims.IsAdmin)
-	c.Set("is_instance_admin", claims.IsInstanceAdmin)
+	c.Set("email", user.Email)
+	// Database privileges are authoritative so promotions and revocations take effect before JWT expiry.
+	c.Set("is_admin", admin)
+	c.Set("is_instance_admin", user.IsInstanceAdministrator)
 	c.Set("email_verified", user.EmailVerifiedAt != nil)
 	c.Set("claims", claims)
 
 	return next(c)
 }
 
-func (m *AuthMiddleware) authenticateWithPAT(c echo.Context, next echo.HandlerFunc, rawToken string) error {
+func (m *AuthMiddleware) authenticateWithPAT(c *echo.Context, next echo.HandlerFunc, rawToken string) error {
 	hash := sha256Hash(rawToken)
 
 	var pat models.PersonalAccessToken
@@ -132,15 +144,22 @@ func (m *AuthMiddleware) authenticateWithPAT(c echo.Context, next echo.HandlerFu
 	if user.Disabled {
 		return response.Forbidden(c, "err.user_account_disabled")
 	}
+	admin, ok, err := accountMembershipAdmin(m.db, &user, pat.AccountID)
+	if err != nil {
+		return response.InternalError(c, "err.database_error")
+	}
+	if !ok {
+		return response.Unauthorized(c, "err.invalid_or_expired_token")
+	}
 
 	now := time.Now()
 
 	m.db.Model(&pat).Update("last_used_at", &now)
 
 	c.Set("user_id", user.ID)
-	c.Set("account_id", user.AccountID)
+	c.Set("account_id", pat.AccountID)
 	c.Set("email", user.Email)
-	c.Set("is_admin", user.IsAccountAdministrator)
+	c.Set("is_admin", admin)
 	c.Set("is_instance_admin", user.IsInstanceAdministrator)
 	c.Set("email_verified", user.EmailVerifiedAt != nil)
 	c.Set("auth_type", "pat")
@@ -150,7 +169,27 @@ func (m *AuthMiddleware) authenticateWithPAT(c echo.Context, next echo.HandlerFu
 	return next(c)
 }
 
-func patHasScope(c echo.Context, scope string) bool {
+func accountMembershipAdmin(db *gorm.DB, user *models.User, accountID string) (bool, bool, error) {
+	if accountID == "" {
+		return false, false, nil
+	}
+	var membership models.AccountMembership
+	err := db.Where("account_id = ? AND user_id = ?", accountID, user.ID).First(&membership).Error
+	if err == nil {
+		// Keep the original user's home-account administrator bit authoritative
+		// while old clients and account-management endpoints still use it.
+		if accountID == user.AccountID {
+			return user.IsAccountAdministrator, true, nil
+		}
+		return membership.IsAdmin, true, nil
+	}
+	if err != gorm.ErrRecordNotFound {
+		return false, false, err
+	}
+	return false, false, nil
+}
+
+func patHasScope(c *echo.Context, scope string) bool {
 	raw, _ := c.Get(ctxPATScopes).(string)
 	for _, s := range strings.Split(raw, ",") {
 		if strings.TrimSpace(s) == scope {
@@ -160,7 +199,7 @@ func patHasScope(c echo.Context, scope string) bool {
 	return false
 }
 
-func isScopedPAT(c echo.Context) bool {
+func isScopedPAT(c *echo.Context) bool {
 	v, _ := c.Get(ctxIsScopedPAT).(bool)
 	return v
 }
@@ -171,7 +210,7 @@ func sha256Hash(s string) string {
 }
 
 func (m *AuthMiddleware) RequireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		isAdmin, ok := c.Get("is_admin").(bool)
 		if !ok || !isAdmin {
 			return response.Forbidden(c, "err.administrator_access_required")
@@ -181,7 +220,7 @@ func (m *AuthMiddleware) RequireAdmin(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 func (m *AuthMiddleware) RequireInstanceAdmin(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		isInstanceAdmin, ok := c.Get("is_instance_admin").(bool)
 		if !ok || !isInstanceAdmin {
 			return response.Forbidden(c, "err.instance_admin_access_required")
@@ -190,17 +229,24 @@ func (m *AuthMiddleware) RequireInstanceAdmin(next echo.HandlerFunc) echo.Handle
 	}
 }
 
-func GetUserID(c echo.Context) string {
+func GetUserID(c *echo.Context) string {
 	id, _ := c.Get("user_id").(string)
 	return id
 }
 
-func GetAccountID(c echo.Context) string {
+func GetAccountID(c *echo.Context) string {
 	id, _ := c.Get("account_id").(string)
 	return id
 }
 
-func GetClaims(c echo.Context) *JWTClaims {
+// GetVaultAccountID is only valid after the vault permission middleware.
+// A cross-account vault invitation never grants access to account settings.
+func GetVaultAccountID(c *echo.Context) string {
+	id, _ := c.Get("vault_account_id").(string)
+	return id
+}
+
+func GetClaims(c *echo.Context) *JWTClaims {
 	claims, _ := c.Get("claims").(*JWTClaims)
 	return claims
 }
@@ -224,7 +270,7 @@ func ParseJWTClaims(tokenString string, secret []byte) (*JWTClaims, error) {
 
 func RequireEmailVerification(isRequired func() bool) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			if !isRequired() {
 				return next(c)
 			}
@@ -242,7 +288,7 @@ func RequireEmailVerification(isRequired func() bool) echo.MiddlewareFunc {
 // is the default-deny half of the scope model: an endpoint must opt in via
 // RequireScope, otherwise scoped tokens are rejected.
 func DenyScopedPAT(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		if isScopedPAT(c) {
 			return response.Forbidden(c, "err.insufficient_token_scope")
 		}
@@ -255,7 +301,7 @@ func DenyScopedPAT(next echo.HandlerFunc) echo.HandlerFunc {
 // always pass.
 func RequireScope(scope string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			if !isScopedPAT(c) {
 				return next(c)
 			}

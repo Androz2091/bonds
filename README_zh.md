@@ -44,7 +44,7 @@ Monica 是一个拥有 24k+ star 的优秀开源个人 CRM。但作为一个由�
 - **OAuth 登录**：GitHub 和 Google 单点登录。
 - **用户邀请**：通过邮件邀请他人加入账户，支持权限级别。
 - **审计日志**：联系人所有变更的操作记录。
-- **地理编码**：通过 Nominatim（免费）或 LocationIQ 获取地址坐标。
+- **地理编码**：支持 Nominatim、LocationIQ、Geoapify，以及公共或自托管 Photon 的可扩展服务商配置。
 - **Shoutrrr 通知**：通过 Telegram 及其他兼容 Shoutrrr 的渠道发送提醒。
 - **国际化**：英文和中文，前后端全覆盖。
 
@@ -56,18 +56,16 @@ Monica 是一个拥有 24k+ star 的优秀开源个人 CRM。但作为一个由�
 # 下载 docker-compose.yml
 curl -O https://raw.githubusercontent.com/naiba/bonds/main/docker-compose.yml
 
+# 在当前 shell 中生成并导出 256 位 JWT 签名密钥
+export JWT_SECRET="$(openssl rand -hex 32)"
+
 # 启动
 docker compose up -d
 ```
 
 打开 **http://localhost:8080**，注册账号即可使用。
 
-自定义配置，编辑 `docker-compose.yml`：
-
-```yaml
-environment:
-  - JWT_SECRET=你的密钥         # ⚠️ Change this!
-```
+请只生成一次密钥，并保存在受保护的环境变量或密钥管理服务中，每次重启都复用同一个值。请规划 JWT 密钥轮换：轮换会使现有会话失效，且由于 DAV 订阅凭据的加密派生自该密钥，可能需要重新录入这些凭据。
 
 ### 方式二：下载预编译版本
 
@@ -75,7 +73,7 @@ environment:
 
 ```bash
 # 设置 JWT 密钥并运行
-export JWT_SECRET=你的密钥
+export JWT_SECRET="$(openssl rand -hex 32)"
 ./bonds-server
 ```
 
@@ -83,7 +81,7 @@ export JWT_SECRET=你的密钥
 
 ### 方式三：从源码构建
 
-**环境要求**：Go 1.25+、[Bun](https://bun.sh) 1.x
+**环境要求**：Go 1.26+、[Bun](https://bun.sh) 1.x
 
 ```bash
 git clone https://github.com/naiba/bonds.git
@@ -96,7 +94,7 @@ make setup
 make build-all
 
 # 运行
-export JWT_SECRET=你的密钥
+export JWT_SECRET="$(openssl rand -hex 32)"
 ./server/bin/bonds-server
 ```
 
@@ -118,7 +116,7 @@ cp server/.env.example server/.env
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `DEBUG` | `false` | 调试模式：启用 Echo 请求日志、GORM SQL 日志、Swagger UI（默认开启） |
-| `JWT_SECRET` | — | **生产环境必填。** 认证令牌签名密钥 |
+| `JWT_SECRET` | — | **生产环境必填。** 使用 `openssl rand -hex 32` 生成 256 位签名密钥，持久保存并在重启时复用。 |
 | `SETTINGS_ENC_KEY` | _(空)_ | 可选。启用 SMTP/OAuth/地理编码等敏感设置的 AES-256-GCM 静态加密。详见[文档](https://naiba.github.io/bonds/zh/guide/configuration#加密敏感设置) |
 | `SERVER_PORT` | `8080` | 服务端口 |
 | `SERVER_HOST` | `0.0.0.0` | 服务器监听地址 |
@@ -140,7 +138,7 @@ cp server/.env.example server/.env
 - **OAuth / OIDC**：GitHub、Google 和 OIDC/SSO 凭据。
 - **WebAuthn**：依赖方 ID、显示名称、允许来源。
 - **Telegram**：Bot Token（通知推送）。
-- **地理编码**：服务商（Nominatim/LocationIQ）、API Key。
+- **地理编码**：启用的服务商、地址隐私精度、各服务商独立凭据和自托管 Photon 地址。
 - **存储**：最大上传大小限制。
 - **备份**：Cron 定时计划、保留天数。
 - **Swagger**：启用或禁用 API 文档界面。
@@ -222,8 +220,8 @@ Bonds 是受 [Monica](https://github.com/monicahq/monica)（AGPL-3.0）启发的
 - **个人用户**：非商业使用完全免费。
 - **组织/企业**：商业使用需向 Licensor 购买许可。
 - **禁止行为**：转售、再许可、作为托管/管理服务提供。
-- **转换日期**：2030年6月13日，届时自动转为 [AGPL-3.0](LICENSE)（与原版 Monica 相同）。
+- **转换日期**：每个版本自首次公开发布之日起满 4 年，自动转为 [AGPL-3.0](LICENSE)。
 
-转换日期后，软件将以 AGPL-3.0 完全开源。
+各版本到达其转换日期后，将以 AGPL-3.0 完全开源。
 
 提交代码、文档、翻译或任何其他贡献，即表示贡献者同意 [贡献条款](CONTRIBUTING.md)，包括在法律允许的最大范围内放弃该贡献中的所有所有权及其他任何权利或主张。

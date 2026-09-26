@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	echoMiddleware "github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo/v5"
+	echoMiddleware "github.com/labstack/echo/v5/middleware"
 	"github.com/naiba/bonds/internal/config"
 	"github.com/naiba/bonds/internal/cron"
 	"github.com/naiba/bonds/internal/database"
@@ -45,6 +45,9 @@ var Version = "dev"
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
 
 	db, err := database.Connect(&cfg.Database, cfg.Debug)
 	if err != nil {
@@ -67,7 +70,12 @@ func main() {
 	oauthProviderService.ReloadProviders()
 
 	migrateUploadDir(cfg.Storage.UploadDir)
-	migrateModulesToContactPage(db)
+	legacyFileService := services.NewVaultFileService(db, cfg.Storage.UploadDir)
+	if migrated, err := legacyFileService.MigrateLegacyPaths(); err != nil {
+		log.Printf("WARNING: failed to migrate legacy Monica file paths: %v", err)
+	} else if migrated > 0 {
+		log.Printf("Migrated %d legacy Monica files to canonical storage", migrated)
+	}
 	migrateContactTasksToManyToMany(db)
 	services.BackfillImportantDateReminderSchedules(db)
 	if err := models.BackfillTaskStatuses(db); err != nil {
@@ -76,21 +84,32 @@ func main() {
 	if err := models.BackfillContactImportantDateTranslationKeys(db); err != nil {
 		log.Printf("WARNING: failed to backfill important date type translation keys: %v", err)
 	}
-	if err := models.BackfillLifeEventTaskPostCalendarTypes(db); err != nil {
-		log.Printf("WARNING: failed to backfill life event/task/post calendar types: %v", err)
+	if err := models.BackfillActivityTaskPostCalendarTypes(db); err != nil {
+		log.Printf("WARNING: failed to backfill activity/task/post calendar types: %v", err)
 	}
 	if err := models.BackfillHowWeMetQuickFactTemplates(db); err != nil {
 		log.Printf("WARNING: failed to backfill how-we-met quick fact templates: %v", err)
 	}
-	if err := models.BackfillLifeEventDefaultDeletability(db); err != nil {
-		log.Printf("WARNING: failed to backfill life event default deletability: %v", err)
+	if err := models.BackfillActivityDefaultDeletability(db); err != nil {
+		log.Printf("WARNING: failed to backfill activity default deletability: %v", err)
 	}
-	if err := models.BackfillGiftContactModules(db); err != nil {
-		log.Printf("WARNING: failed to backfill gift contact modules: %v", err)
+	if err := models.BackfillInteractionActivityTypes(db); err != nil {
+		log.Printf("WARNING: failed to backfill interaction activity types: %v", err)
 	}
-
+	if err := models.BackfillMonicaActivityNotes(db); err != nil {
+		log.Printf("WARNING: failed to migrate Monica activity notes: %v", err)
+	}
 	scheduler := cron.NewScheduler(db)
 	scheduler.Start()
+	// Sanitized operator log is bounded: it contains no private content, and
+	// expires after 90 days to avoid unbounded growth and stale identifiers.
+	if err := scheduler.RegisterJob("0 15 2 * * *", "expire_audit_events", func() {
+		if err := db.Where("created_at < ?", time.Now().AddDate(0, 0, -90)).Delete(&models.AuditEvent{}).Error; err != nil {
+			log.Printf("[cron] expire_audit_events error: %v", err)
+		}
+	}); err != nil {
+		log.Printf("WARNING: Failed to register audit retention job: %v", err)
+	}
 
 	mailer := services.NewDynamicMailer(systemSettingService)
 	notificationSender := services.NewShoutrrrSender()
@@ -116,9 +135,12 @@ func main() {
 
 	backupService := services.NewBackupService(db, cfg)
 	backupService.SetSystemSettings(systemSettingService)
-	backupCron := systemSettingService.GetWithDefault("backup.cron", cfg.Backup.Cron)
-	if backupCron != "" {
-		if err := scheduler.RegisterJob(backupCron, "create_backup", func() {
+	// reloadBackup keeps the backup cron job in sync with the backup.cron
+	// system setting. It is invoked at startup and registered as a reloader so
+	// that changing the schedule in the admin panel takes effect immediately.
+	reloadBackup := func() {
+		backupCron := systemSettingService.GetWithDefault("backup.cron", cfg.Backup.Cron)
+		if err := scheduler.UpsertJob(backupCron, "create_backup", func() {
 			if _, err := backupService.Create(); err != nil {
 				log.Printf("WARNING: Backup cron failed: %v", err)
 			}
@@ -129,17 +151,17 @@ func main() {
 			log.Printf("WARNING: Failed to register backup cron job: %v", err)
 		}
 	}
+	reloadBackup()
 
 	e := echo.New()
-	e.HideBanner = true
 
 	if cfg.Debug {
-		e.Use(echoMiddleware.Logger())
+		e.Use(echoMiddleware.RequestLogger())
 	}
 	e.Use(echoMiddleware.Recover())
 	e.Use(appMiddleware.Locale())
 
-	handlers.RegisterRoutes(e, db, cfg, Version)
+	handlers.RegisterRoutes(e, db, cfg, Version, reloadBackup)
 
 	dav.SetupDAVRoutes(e, db)
 
@@ -154,9 +176,17 @@ func main() {
 	defer stop()
 
 	addr := fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port)
+	serverCtx, stopServer := context.WithCancel(context.Background())
+	serverDone := make(chan struct{})
 	go func() {
+		defer close(serverDone)
 		log.Printf("Starting server on %s", addr)
-		if err := e.Start(addr); err != nil {
+		startConfig := echo.StartConfig{
+			Address:         addr,
+			HideBanner:      true,
+			GracefulTimeout: 10 * time.Second,
+		}
+		if err := startConfig.Start(serverCtx, e); err != nil {
 			log.Printf("Server stopped: %v", err)
 		}
 	}()
@@ -172,11 +202,8 @@ func main() {
 		log.Println("Cron scheduler stop timed out")
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := e.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Server shutdown error: %v", err)
-	}
+	stopServer()
+	<-serverDone
 
 	log.Println("Server exited")
 }

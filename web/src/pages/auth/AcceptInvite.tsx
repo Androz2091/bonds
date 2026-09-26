@@ -1,7 +1,22 @@
 import { useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { Card, Form, Input, Button, Typography, App, theme, Tooltip } from "antd";
-import { UserOutlined, LockOutlined, SunOutlined, MoonOutlined, DesktopOutlined } from "@ant-design/icons";
+import {
+  Card,
+  Form,
+  Input,
+  Button,
+  Typography,
+  App,
+  theme,
+  Tooltip,
+} from "antd";
+import {
+  UserOutlined,
+  LockOutlined,
+  SunOutlined,
+  MoonOutlined,
+  DesktopOutlined,
+} from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useTheme } from "@/stores/theme";
 import type { ThemeMode } from "@/stores/theme";
@@ -9,11 +24,15 @@ import logoImg from "@/assets/logo.svg";
 import { api } from "@/api";
 import type { APIError } from "@/api";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/stores/auth";
 
 const { Title, Text } = Typography;
 
 export default function AcceptInvite() {
   const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
+  const { user, isAuthenticated } = useAuth();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { message } = App.useApp();
@@ -21,6 +40,13 @@ export default function AcceptInvite() {
   const { token: themeToken } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
   const token = searchParams.get("token") ?? "";
+  const { data: invitation, isError: invalidInvitation } = useQuery({
+    queryKey: ["invitation", token],
+    queryFn: async () => (await api.invitations.invitationsDetail(token)).data,
+    enabled: !!token,
+    retry: false,
+  });
+  const signInURL = `/login?redirect=${encodeURIComponent(`/accept-invite?token=${token}`)}`;
 
   const themeModeOrder: ThemeMode[] = ["light", "dark", "system"];
   const themeModeIcons: Record<ThemeMode, React.ReactNode> = {
@@ -56,6 +82,21 @@ export default function AcceptInvite() {
     }
   }
 
+  async function acceptExisting() {
+    setLoading(true);
+    try {
+      await api.invitations.acceptExistingCreate({ token });
+      await queryClient.invalidateQueries({ queryKey: ["vaults"] });
+      await queryClient.invalidateQueries({ queryKey: ["auth", "accounts"] });
+      message.success(t("acceptInvite.accepted"));
+      navigate("/vaults", { replace: true });
+    } catch (err) {
+      message.error((err as APIError).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div
       style={{
@@ -69,9 +110,22 @@ export default function AcceptInvite() {
         position: "relative",
       }}
     >
-      <div style={{ position: "absolute", top: 16, right: 16, display: "flex", gap: 4 }}>
+      <div
+        style={{
+          position: "absolute",
+          top: 16,
+          right: 16,
+          display: "flex",
+          gap: 4,
+        }}
+      >
         <Tooltip title={themeModeLabels[themeMode]}>
-          <Button type="text" size="small" icon={themeModeIcons[themeMode]} onClick={nextThemeMode} />
+          <Button
+            type="text"
+            size="small"
+            icon={themeModeIcons[themeMode]}
+            onClick={nextThemeMode}
+          />
         </Tooltip>
         <LanguageSwitcher />
       </div>
@@ -85,14 +139,28 @@ export default function AcceptInvite() {
         }}
       >
         <div style={{ textAlign: "center", marginBottom: 32 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 20 }}>
-            <img src={logoImg} alt="Bonds" style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0 }} />
-            <span style={{
-              fontWeight: 700,
-              fontSize: 22,
-              letterSpacing: "-0.02em",
-              color: themeToken.colorPrimary,
-            }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+              marginBottom: 20,
+            }}
+          >
+            <img
+              src={logoImg}
+              alt="Bonds"
+              style={{ width: 36, height: 36, borderRadius: 10, flexShrink: 0 }}
+            />
+            <span
+              style={{
+                fontWeight: 700,
+                fontSize: 22,
+                letterSpacing: "-0.02em",
+                color: themeToken.colorPrimary,
+              }}
+            >
               Bonds
             </span>
           </div>
@@ -100,53 +168,108 @@ export default function AcceptInvite() {
             {t("acceptInvite.title")}
           </Title>
           <Text type="secondary">{t("acceptInvite.subtitle")}</Text>
+          {invitation && (
+            <div style={{ marginTop: 12 }}>
+              {t(
+                invitation.vault_id
+                  ? "acceptInvite.vaultScope"
+                  : "acceptInvite.accountScope",
+              )}
+              {": "}
+              {invitation.email}
+            </div>
+          )}
         </div>
-
-        <Form layout="vertical" onFinish={onFinish} size="large">
-          <Form.Item
-            name="first_name"
-            rules={[{ required: true }]}
-          >
-            <Input
-              prefix={<UserOutlined />}
-              placeholder={t("acceptInvite.firstName")}
-            />
-          </Form.Item>
-
-          <Form.Item name="last_name">
-            <Input
-              prefix={<UserOutlined />}
-              placeholder={t("acceptInvite.lastName")}
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="password"
-            rules={[{ required: true, min: 8 }]}
-          >
-            <Input.Password
-              prefix={<LockOutlined />}
-              placeholder={t("acceptInvite.password")}
-            />
-          </Form.Item>
-
-          <Form.Item>
+        {invalidInvitation || !token ? (
+          <Text type="danger">{t("acceptInvite.invalid")}</Text>
+        ) : isAuthenticated ? (
+          <div>
+            <Text>{t("acceptInvite.signedInAs", { email: user?.email })}</Text>
             <Button
               type="primary"
-              htmlType="submit"
-              loading={loading}
               block
+              loading={loading}
+              disabled={!invitation}
+              onClick={acceptExisting}
+              style={{ marginTop: 16 }}
             >
-              {t("acceptInvite.submit")}
+              {t("acceptInvite.acceptExisting")}
             </Button>
-          </Form.Item>
-        </Form>
+            <Button type="link" block onClick={() => navigate(signInURL)}>
+              {t("acceptInvite.switchUser")}
+            </Button>
+          </div>
+        ) : (
+          <>
+            <Button
+              block
+              onClick={() => navigate(signInURL)}
+              style={{ marginBottom: 20 }}
+            >
+              {t("acceptInvite.haveAccount")}
+            </Button>
+            <Form layout="vertical" onFinish={onFinish} size="large">
+              <Form.Item name="first_name" rules={[{ required: true }]}>
+                <Input
+                  prefix={<UserOutlined />}
+                  placeholder={t("acceptInvite.firstName")}
+                />
+              </Form.Item>
+
+              <Form.Item name="last_name">
+                <Input
+                  prefix={<UserOutlined />}
+                  placeholder={t("acceptInvite.lastName")}
+                />
+              </Form.Item>
+
+              <Form.Item name="password" rules={[{ required: true, min: 8 }]}>
+                <Input.Password
+                  prefix={<LockOutlined />}
+                  placeholder={t("acceptInvite.password")}
+                />
+              </Form.Item>
+
+              <Form.Item>
+                <Button
+                  type="primary"
+                  htmlType="submit"
+                  loading={loading}
+                  block
+                >
+                  {t("acceptInvite.submit")}
+                </Button>
+              </Form.Item>
+            </Form>
+          </>
+        )}
       </Card>
-      <div style={{ textAlign: "center", marginTop: 24, color: themeToken.colorTextQuaternary, fontSize: 12 }}>
+      <div
+        style={{
+          textAlign: "center",
+          marginTop: 24,
+          color: themeToken.colorTextQuaternary,
+          fontSize: 12,
+        }}
+      >
         © {new Date().getFullYear()}{" "}
-        <a href="https://github.com/naiba/bonds" target="_blank" rel="noopener noreferrer" style={{ color: themeToken.colorTextTertiary }}>Bonds</a>
+        <a
+          href="https://github.com/naiba/bonds"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: themeToken.colorTextTertiary }}
+        >
+          Bonds
+        </a>
         {" " + t("auth.login.footer_by") + " "}
-        <a href="https://nai.ba" target="_blank" rel="noopener noreferrer" style={{ color: themeToken.colorTextTertiary }}>naiba</a>
+        <a
+          href="https://nai.ba"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: themeToken.colorTextTertiary }}
+        >
+          naiba
+        </a>
       </div>
     </div>
   );

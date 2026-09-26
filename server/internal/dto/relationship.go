@@ -33,14 +33,73 @@ type GraphNode struct {
 }
 
 type GraphEdge struct {
-	Source string `json:"source" example:"550e8400-e29b-41d4-a716-446655440000"`
-	Target string `json:"target" example:"660e8400-e29b-41d4-a716-446655440001"`
-	Type   string `json:"type" example:"Parent"`
+	Source    string          `json:"source" example:"550e8400-e29b-41d4-a716-446655440000"`
+	Target    string          `json:"target" example:"660e8400-e29b-41d4-a716-446655440001"`
+	Type      string          `json:"type" example:"Parent"`
+	Inferred  bool            `json:"inferred" example:"false"`
+	Relations []GraphRelation `json:"relations"`
+}
+
+// GraphRelation describes one relationship carried by a visual edge. The
+// labels are stored from both endpoint perspectives so reciprocal database
+// rows (for example Parent/Child) can be rendered as one non-overlapping edge.
+type GraphRelation struct {
+	SourceKind  string `json:"source_kind" example:"parent"`
+	TargetKind  string `json:"target_kind" example:"child"`
+	SourceLabel string `json:"source_label" example:"Parent"`
+	TargetLabel string `json:"target_label" example:"Child"`
+	Inferred    bool   `json:"inferred" example:"false"`
+	Generations int    `json:"generations,omitempty" example:"2"`
 }
 
 type ContactGraphResponse struct {
 	Nodes []GraphNode `json:"nodes"`
 	Edges []GraphEdge `json:"edges"`
+}
+
+// GraphFacetValue is one selectable value of a facet, with how many of the
+// vault's drawable contacts carry it. Values are identified by their row id
+// rather than their name, so renaming one does not change what a saved filter
+// means.
+type GraphFacetValue struct {
+	Value string `json:"value" example:"12"`
+	Label string `json:"label" example:"Eton College"`
+	Count int    `json:"count" example:"4581"`
+}
+
+// GraphFacet is one dimension the vault graph can be narrowed by. Facets no
+// contact in the vault carries are not returned at all, so the page never
+// renders a control that could only ever match nothing.
+type GraphFacet struct {
+	Key    string            `json:"key" example:"group"`
+	Values []GraphFacetValue `json:"values"`
+}
+
+// VaultGraphResponse is the whole-vault graph. The counts alongside the graph
+// describe what was left out of it, so the page can account for the difference
+// between the vault and the drawing.
+type VaultGraphResponse struct {
+	Nodes []GraphNode `json:"nodes"`
+	Edges []GraphEdge `json:"edges"`
+	// Components is the number of separate clusters drawn.
+	Components int `json:"components" example:"3"`
+	// IsolatedContacts counts contacts in the vault with no relationship to
+	// another contact in the same vault; they are not drawn.
+	IsolatedContacts int `json:"isolated_contacts" example:"12"`
+	// ExternalRelationships counts relationships from a contact in this vault
+	// to a readable contact outside it; they are not drawn.
+	ExternalRelationships int `json:"external_relationships" example:"4"`
+	// Truncated reports that whole components were dropped to stay within the
+	// node limit.
+	Truncated bool `json:"truncated" example:"false"`
+	// Facets are the dimensions this vault can be narrowed by, with the values
+	// its drawable contacts actually carry. Always computed before the filter is
+	// applied, so a selection never narrows the list it was chosen from.
+	Facets []GraphFacet `json:"facets"`
+	// FilteredOut counts contacts that would have been drawn but for the filter:
+	// both those that failed it and those that passed but lost every partner
+	// that did not.
+	FilteredOut int `json:"filtered_out" example:"37"`
 }
 
 type KinshipResponse struct {

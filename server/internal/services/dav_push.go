@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
@@ -12,10 +14,25 @@ import (
 )
 
 type DavPushService struct {
-	db            *gorm.DB
-	clientService *DavClientService
-	vcardService  *VCardService
-	clientFactory CardDAVClientFactory
+	db             *gorm.DB
+	clientService  *DavClientService
+	vcardService   *VCardService
+	clientFactory  CardDAVClientFactory
+	operationLocks contactDAVOperationLockRegistry
+}
+
+type contactRemoteDeletionTarget struct {
+	contactID      string
+	subscriptionID string
+	distantURI     string
+}
+
+func newContactRemoteDeletionTarget(state models.ContactSubscriptionState) contactRemoteDeletionTarget {
+	return contactRemoteDeletionTarget{
+		contactID:      state.ContactID,
+		subscriptionID: state.AddressBookSubscriptionID,
+		distantURI:     state.DistantURI,
+	}
 }
 
 func NewDavPushService(db *gorm.DB, clientService *DavClientService, vcardService *VCardService) *DavPushService {
@@ -38,6 +55,13 @@ func (s *DavPushService) findPushSubscriptions(vaultID string) ([]models.Address
 }
 
 func (s *DavPushService) PushContactChange(contactID, vaultID string) {
+	release := s.operationLocks.lock(contactID)
+	defer release()
+	s.pushContactChange(contactID, vaultID)
+}
+
+// pushContactChange requires the caller to hold contactID's DAV operation lock.
+func (s *DavPushService) pushContactChange(contactID, vaultID string) {
 	subs, err := s.findPushSubscriptions(vaultID)
 	if err != nil {
 		log.Printf("[dav-push] failed to find push subscriptions for vault %s: %v", vaultID, err)
@@ -58,13 +82,12 @@ func (s *DavPushService) PushContactChange(contactID, vaultID string) {
 		log.Printf("[dav-push] failed to export contact %s to vCard: %v", contactID, err)
 		return
 	}
+	if contact.DistantUUID != nil && strings.TrimSpace(*contact.DistantUUID) != "" {
+		// A CardDAV UID is stable even when the object is updated in place.
+		card.SetValue("UID", *contact.DistantUUID)
+	}
 
 	for _, sub := range subs {
-		if contact.DistantURI != nil && strings.HasPrefix(*contact.DistantURI, strings.TrimRight(sub.URI, "/")) {
-			s.logPushAction(sub.ID, &contactID, ptrToStr(contact.DistantURI), "", "skipped_push_origin", "contact was pulled from this subscription")
-			continue
-		}
-
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -78,7 +101,7 @@ func (s *DavPushService) PushContactChange(contactID, vaultID string) {
 				return
 			}
 
-			client, err := s.clientFactory.NewClient(sub.URI, sub.Username, password)
+			client, err := s.clientFactory.NewClient(sub.URI, sub.Username, password, DavTLSConfig{CustomCAPEM: sub.CustomCAPEM, SkipTLSVerify: sub.SkipTLSVerify})
 			if err != nil {
 				s.logPushAction(sub.ID, &contactID, "", "", "error", fmt.Sprintf("create client failed: %v", err))
 				return
@@ -88,11 +111,20 @@ func (s *DavPushService) PushContactChange(contactID, vaultID string) {
 			defer cancel()
 
 			var state models.ContactSubscriptionState
-			hasState := s.db.Where("contact_id = ? AND address_book_subscription_id = ?", contactID, sub.ID).First(&state).Error == nil
+			stateErr := s.db.Where("contact_id = ? AND address_book_subscription_id = ?", contactID, sub.ID).First(&state).Error
+			hasState := stateErr == nil
+			if stateErr != nil && !errors.Is(stateErr, gorm.ErrRecordNotFound) {
+				s.logPushAction(sub.ID, &contactID, "", "", "error", fmt.Sprintf("load subscription state failed: %v", stateErr))
+				return
+			}
 
 			var putPath string
 			if hasState {
 				putPath = state.DistantURI
+			} else if contact.DistantURI != nil && distantURIIsWithinSubscription(*contact.DistantURI, &sub) {
+				// Compatibility for contacts pulled before pull-side subscription states
+				// were recorded. Update the original CardDAV object in place.
+				putPath = *contact.DistantURI
 			} else {
 				basePath := sub.AddressBookPath
 				if basePath == "" {
@@ -117,18 +149,9 @@ func (s *DavPushService) PushContactChange(contactID, vaultID string) {
 				resultPath = putPath
 			}
 
-			if hasState {
-				s.db.Model(&state).Updates(map[string]interface{}{
-					"distant_uri":  resultPath,
-					"distant_etag": resultEtag,
-				})
-			} else {
-				s.db.Create(&models.ContactSubscriptionState{
-					ContactID:                 contactID,
-					AddressBookSubscriptionID: sub.ID,
-					DistantURI:                resultPath,
-					DistantEtag:               resultEtag,
-				})
+			if err := upsertContactSubscriptionState(s.db, contactID, sub.ID, resultPath, resultEtag); err != nil {
+				s.logPushAction(sub.ID, &contactID, resultPath, resultEtag, "error", fmt.Sprintf("save subscription state failed: %v", err))
+				return
 			}
 
 			s.logPushAction(sub.ID, &contactID, resultPath, resultEtag, "pushed", "")
@@ -136,49 +159,121 @@ func (s *DavPushService) PushContactChange(contactID, vaultID string) {
 	}
 }
 
+func distantURIIsWithinSubscription(distantURI string, sub *models.AddressBookSubscription) bool {
+	for _, base := range []string{sub.AddressBookPath, sub.URI} {
+		if davURIHasBase(distantURI, base) {
+			return true
+		}
+	}
+	return false
+}
+
+func davURIHasBase(rawURI, rawBase string) bool {
+	if rawURI == "" || rawBase == "" {
+		return false
+	}
+
+	parsedURI, uriErr := url.Parse(rawURI)
+	parsedBase, baseErr := url.Parse(rawBase)
+	if uriErr != nil || baseErr != nil {
+		return false
+	}
+	if parsedURI.Host != "" && parsedBase.Host != "" && !strings.EqualFold(parsedURI.Host, parsedBase.Host) {
+		return false
+	}
+
+	uriPath := parsedURI.Path
+	basePath := parsedBase.Path
+	if uriPath == "" {
+		if parsedURI.Host != "" {
+			uriPath = "/"
+		} else {
+			uriPath = rawURI
+		}
+	}
+	if basePath == "" {
+		if parsedBase.Host != "" {
+			basePath = "/"
+		} else {
+			basePath = rawBase
+		}
+	}
+	basePath = strings.TrimRight(basePath, "/")
+	if basePath == "" {
+		return strings.HasPrefix(uriPath, "/")
+	}
+	return uriPath == basePath || strings.HasPrefix(uriPath, basePath+"/")
+}
+
 func (s *DavPushService) PushContactDelete(contactID, vaultID string) {
+	release := s.operationLocks.lock(contactID)
+	defer release()
+
 	var states []models.ContactSubscriptionState
-	s.db.Where("contact_id = ?", contactID).Find(&states)
+	if err := s.db.Where("contact_id = ?", contactID).Find(&states).Error; err != nil {
+		log.Printf("[dav-push] failed to find delete states for contact %s: %v", contactID, err)
+		return
+	}
 	if len(states) == 0 {
 		return
 	}
+	targets := make([]contactRemoteDeletionTarget, len(states))
+	for index := range states {
+		targets[index] = newContactRemoteDeletionTarget(states[index])
+	}
+	s.pushContactDeleteTargets(targets, true)
+}
 
-	for _, state := range states {
+func (s *DavPushService) pushCapturedContactDelete(targets []contactRemoteDeletionTarget) {
+	s.pushContactDeleteTargets(targets, false)
+}
+
+func (s *DavPushService) pushContactDeleteTargets(targets []contactRemoteDeletionTarget, deleteLocalState bool) {
+	for _, target := range targets {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[dav-push] panic deleting contact %s from subscription %s: %v", contactID, state.AddressBookSubscriptionID, r)
+					log.Printf("[dav-push] panic deleting contact %s from subscription %s: %v", target.contactID, target.subscriptionID, r)
 				}
 			}()
 
 			var sub models.AddressBookSubscription
-			if err := s.db.Where("id = ? AND active = ? AND (sync_way & ?) != 0", state.AddressBookSubscriptionID, true, SyncWayPush).First(&sub).Error; err != nil {
-				s.db.Delete(&state)
+			if err := s.db.Where("id = ? AND active = ? AND (sync_way & ?) != 0", target.subscriptionID, true, SyncWayPush).First(&sub).Error; err != nil {
+				if deleteLocalState {
+					if err := s.db.Where("contact_id = ? AND address_book_subscription_id = ?", target.contactID, target.subscriptionID).Delete(&models.ContactSubscriptionState{}).Error; err != nil {
+						log.Printf("[dav-push] failed to delete stale state for contact %s: %v", target.contactID, err)
+					}
+				}
 				return
 			}
 
 			password, err := s.clientService.decryptPassword(sub.Password)
 			if err != nil {
-				s.logPushAction(sub.ID, &contactID, state.DistantURI, "", "error", fmt.Sprintf("decrypt password failed: %v", err))
+				s.logPushAction(sub.ID, &target.contactID, target.distantURI, "", "error", fmt.Sprintf("decrypt password failed: %v", err))
 				return
 			}
 
-			client, err := s.clientFactory.NewClient(sub.URI, sub.Username, password)
+			client, err := s.clientFactory.NewClient(sub.URI, sub.Username, password, DavTLSConfig{CustomCAPEM: sub.CustomCAPEM, SkipTLSVerify: sub.SkipTLSVerify})
 			if err != nil {
-				s.logPushAction(sub.ID, &contactID, state.DistantURI, "", "error", fmt.Sprintf("create client failed: %v", err))
+				s.logPushAction(sub.ID, &target.contactID, target.distantURI, "", "error", fmt.Sprintf("create client failed: %v", err))
 				return
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
-			if err := client.RemoveAll(ctx, state.DistantURI); err != nil {
-				s.logPushAction(sub.ID, &contactID, state.DistantURI, "", "error", fmt.Sprintf("DELETE failed: %v", err))
+			if err := client.RemoveAll(ctx, target.distantURI); err != nil {
+				s.logPushAction(sub.ID, &target.contactID, target.distantURI, "", "error", fmt.Sprintf("DELETE failed: %v", err))
 				return
 			}
 
-			s.db.Delete(&state)
-			s.logPushAction(sub.ID, &contactID, state.DistantURI, "", "push_deleted", "")
+			if deleteLocalState {
+				if err := s.db.Where("contact_id = ? AND address_book_subscription_id = ?", target.contactID, target.subscriptionID).Delete(&models.ContactSubscriptionState{}).Error; err != nil {
+					log.Printf("[dav-push] failed to delete state for contact %s: %v", target.contactID, err)
+					return
+				}
+			}
+			s.logPushAction(sub.ID, &target.contactID, target.distantURI, "", "push_deleted", "")
 		}()
 	}
 }

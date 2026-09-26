@@ -54,6 +54,9 @@ func createSecondUser(t *testing.T, ts *testServer, accountID, email string, isA
 	if err := ts.db.Create(&user).Error; err != nil {
 		t.Fatalf("failed to create second user: %v", err)
 	}
+	if err := ts.db.Create(&models.AccountMembership{AccountID: accountID, UserID: user.ID, IsAdmin: isAdmin}).Error; err != nil {
+		t.Fatalf("failed to create account membership: %v", err)
+	}
 	return user
 }
 
@@ -62,7 +65,6 @@ func addUserToVault(t *testing.T, ts *testServer, userID, vaultID string, permis
 	uv := models.UserVault{
 		VaultID:    vaultID,
 		UserID:     userID,
-		ContactID:  "",
 		Permission: permission,
 	}
 	if err := ts.db.Create(&uv).Error; err != nil {
@@ -160,7 +162,7 @@ func TestEditorCanCreateContact(t *testing.T) {
 	}
 }
 
-func TestNonAdminCannotAccessPersonalize(t *testing.T) {
+func TestNonAdminCanReadButCannotMutateSharedAccountData(t *testing.T) {
 	ts := setupTestServer(t)
 
 	token1, auth1 := ts.registerTestUser(t, "personalize-admin@example.com")
@@ -169,13 +171,23 @@ func TestNonAdminCannotAccessPersonalize(t *testing.T) {
 	token2 := generateJWT(user2.ID, user2.AccountID, user2.Email, false, false)
 
 	rec := ts.doRequest(http.MethodGet, "/api/settings/personalize/genders", "", token2)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for non-admin accessing personalize, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for account member reading shared data, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	rec = ts.doRequest(http.MethodGet, "/api/settings/personalize/genders", "", token1)
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 for admin accessing personalize, got %d: %s", rec.Code, rec.Body.String())
+	rec = ts.doRequest(http.MethodPost, "/api/settings/personalize/genders", `{"name":"Private override"}`, token2)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for non-admin mutating shared data, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = ts.doRequest(http.MethodPost, "/api/settings/personalize/sync", `{"locale":"en"}`, token2)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for non-admin translating shared data, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = ts.doRequest(http.MethodPost, "/api/settings/personalize/genders", `{"name":"Shared value"}`, token1)
+	if rec.Code != http.StatusCreated {
+		t.Errorf("expected 201 for account admin mutating shared data, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -240,36 +252,6 @@ func createTestNote(t *testing.T, ts *testServer, token, vaultID, contactID stri
 	var data map[string]interface{}
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
 		t.Fatalf("failed to parse note data: %v", err)
-	}
-	return fmt.Sprintf("%v", data["id"])
-}
-
-func createTestReminder(t *testing.T, ts *testServer, token, vaultID, contactID string) string {
-	t.Helper()
-	path := fmt.Sprintf("/api/vaults/%s/contacts/%s/reminders", vaultID, contactID)
-	rec := ts.doRequest(http.MethodPost, path, `{"label":"Test Reminder","day":1,"month":1,"type":"one_time"}`, token)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("createTestReminder failed: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	resp := parseResponse(t, rec)
-	var data map[string]interface{}
-	if err := json.Unmarshal(resp.Data, &data); err != nil {
-		t.Fatalf("failed to parse reminder data: %v", err)
-	}
-	return fmt.Sprintf("%v", data["id"])
-}
-
-func createTestTask(t *testing.T, ts *testServer, token, vaultID, contactID string) string {
-	t.Helper()
-	path := fmt.Sprintf("/api/vaults/%s/contacts/%s/tasks", vaultID, contactID)
-	rec := ts.doRequest(http.MethodPost, path, `{"label":"Test Task","description":"desc"}`, token)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("createTestTask failed: status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	resp := parseResponse(t, rec)
-	var data map[string]interface{}
-	if err := json.Unmarshal(resp.Data, &data); err != nil {
-		t.Fatalf("failed to parse task data: %v", err)
 	}
 	return fmt.Sprintf("%v", data["id"])
 }
@@ -1209,6 +1191,30 @@ func TestCrossVaultGroupMembershipDeleteBlocked(t *testing.T) {
 	}
 }
 
+func TestCrossVaultGroupBulkMembersAddBlocked(t *testing.T) {
+	ts := setupTestServer(t)
+
+	token, _ := ts.registerTestUser(t, "cross-vault-group-bulk-membership@example.com")
+	vault := ts.createTestVault(t, token, "Group Members Vault")
+	foreignVault := ts.createTestVault(t, token, "Foreign Group Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "Grouped")
+	groupID := createTestGroup(t, ts, vault.ID, "Grouped Contacts")
+
+	path := fmt.Sprintf("/api/vaults/%s/groups/%d/members", foreignVault.ID, groupID)
+	rec := ts.doRequest(http.MethodPost, path, fmt.Sprintf(`{"contact_ids":["%s"]}`, contact.ID), token)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for cross-vault bulk member add, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var memberCount int64
+	if err := ts.db.Model(&models.ContactGroup{}).Where("group_id = ?", groupID).Count(&memberCount).Error; err != nil {
+		t.Fatalf("count group members after blocked add: %v", err)
+	}
+	if memberCount != 0 {
+		t.Fatalf("blocked group member count = %d, want 0", memberCount)
+	}
+}
+
 // ==================== L. Cross-Vault IDOR Tests for Files ====================
 
 func TestCrossVaultFileDownloadBlocked(t *testing.T) {
@@ -1744,7 +1750,7 @@ func TestViewerCannotListVaultUsers(t *testing.T) {
 
 func TestViewerCannotAddVaultUser(t *testing.T) {
 	ts, _, viewerToken, vaultID, _ := setupViewerTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vaultID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vaultID)
 	rec := ts.doRequest(http.MethodPost, path, `{"email":"intruder@example.com","permission":300}`, viewerToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Viewer adding vault user, got %d: %s", rec.Code, rec.Body.String())
@@ -1789,7 +1795,7 @@ func TestEditorCannotUpdateVaultSettings(t *testing.T) {
 
 func TestEditorCannotManageVaultUsers(t *testing.T) {
 	ts, _, editorToken, vaultID, _ := setupEditorTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vaultID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vaultID)
 	rec := ts.doRequest(http.MethodPost, path, `{"email":"intruder@example.com","permission":300}`, editorToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Editor managing vault users, got %d: %s", rec.Code, rec.Body.String())
@@ -1861,21 +1867,53 @@ func TestViewerCannotCreateGoal(t *testing.T) {
 	}
 }
 
-func TestViewerCannotCreateLifeEvent(t *testing.T) {
-	ts, _, viewerToken, vaultID, contactID := setupViewerTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/contacts/%s/timelineEvents", vaultID, contactID)
+func TestViewerCannotCreateActivity(t *testing.T) {
+	ts, _, viewerToken, vaultID, _ := setupViewerTest(t)
+	path := fmt.Sprintf("/api/vaults/%s/activities", vaultID)
 	rec := ts.doRequest(http.MethodPost, path, `{"label":"Hacked","started_at":"2024-01-01T00:00:00Z"}`, viewerToken)
 	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for Viewer creating life event, got %d: %s", rec.Code, rec.Body.String())
+		t.Errorf("expected 403 for Viewer creating activity, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestViewerCannotCreateMoodEvent(t *testing.T) {
-	ts, _, viewerToken, vaultID, contactID := setupViewerTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/contacts/%s/moodTrackingEvents", vaultID, contactID)
-	rec := ts.doRequest(http.MethodPost, path, `{"rated_at":"2024-01-01T00:00:00Z","parameter_id":1,"rating":3}`, viewerToken)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for Viewer creating mood event, got %d: %s", rec.Code, rec.Body.String())
+func TestViewerCanReadActivityDetail(t *testing.T) {
+	ts, adminToken, viewerToken, vaultID, contactID := setupViewerTest(t)
+	var typeID uint
+	if err := ts.db.Table("activity_types").
+		Joins("JOIN activity_categories ON activity_categories.id = activity_types.activity_category_id").
+		Where("activity_categories.vault_id = ?", vaultID).
+		Pluck("activity_types.id", &typeID).Error; err != nil {
+		t.Fatalf("load activity type: %v", err)
+	}
+	body := fmt.Sprintf(`{"primary_contact_id":%q,"activity_type_id":%d,"title":"Viewer readable"}`, contactID, typeID)
+	created := ts.doRequest(http.MethodPost, fmt.Sprintf("/api/vaults/%s/activities", vaultID), body, adminToken)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create activity: %d %s", created.Code, created.Body.String())
+	}
+	var activity struct {
+		ID uint `json:"id"`
+	}
+	if err := json.Unmarshal(parseResponse(t, created).Data, &activity); err != nil {
+		t.Fatalf("decode activity: %v", err)
+	}
+
+	rec := ts.doRequest(http.MethodGet, fmt.Sprintf("/api/vaults/%s/activities/%d", vaultID, activity.ID), "", viewerToken)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected Viewer detail read 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestViewerCanCreateOwnMoodEvent(t *testing.T) {
+	ts, _, viewerToken, vaultID, _ := setupViewerTest(t)
+	var parameterID uint
+	if err := ts.db.Model(&models.MoodTrackingParameter{}).Where("vault_id = ?", vaultID).Order("id").Pluck("id", &parameterID).Error; err != nil {
+		t.Fatalf("load mood parameter: %v", err)
+	}
+	path := fmt.Sprintf("/api/vaults/%s/moodTrackingEvents", vaultID)
+	body := fmt.Sprintf(`{"rated_at":"2024-01-01T00:00:00Z","mood_tracking_parameter_id":%d}`, parameterID)
+	rec := ts.doRequest(http.MethodPost, path, body, viewerToken)
+	if rec.Code != http.StatusCreated {
+		t.Errorf("expected 201 for Viewer recording own mood, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1980,7 +2018,7 @@ func TestDisabledUserCannotAccessSettings(t *testing.T) {
 
 func TestViewerCannotAddUserToVault(t *testing.T) {
 	ts, _, viewerToken, vaultID, _ := setupViewerTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vaultID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vaultID)
 	rec := ts.doRequest(http.MethodPost, path, `{"email":"intruder@example.com","permission":300}`, viewerToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Viewer adding user to vault, got %d: %s", rec.Code, rec.Body.String())
@@ -1989,7 +2027,7 @@ func TestViewerCannotAddUserToVault(t *testing.T) {
 
 func TestEditorCannotAddUserToVault(t *testing.T) {
 	ts, _, editorToken, vaultID, _ := setupEditorTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vaultID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vaultID)
 	rec := ts.doRequest(http.MethodPost, path, `{"email":"intruder@example.com","permission":300}`, editorToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Editor adding user to vault, got %d: %s", rec.Code, rec.Body.String())
@@ -2011,6 +2049,42 @@ func TestEditorCannotRemoveVaultUser(t *testing.T) {
 	rec := ts.doRequest(http.MethodDelete, path, "", editorToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Editor removing vault user, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestSoleVaultManagerCannotDemoteThemselves(t *testing.T) {
+	ts := setupTestServer(t)
+	managerToken, manager := ts.registerTestUser(t, "sole-manager-handler@example.com")
+	vault := ts.createTestVault(t, managerToken, "Sole Manager Vault")
+	membership := getHandlerUserVault(t, ts, manager.User.ID, vault.ID)
+
+	path := fmt.Sprintf("/api/vaults/%s/settings/users/%d", vault.ID, membership.ID)
+	rec := ts.doRequest(http.MethodPut, path, `{"permission":200}`, managerToken)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for sole manager demotion, got %d: %s", rec.Code, rec.Body.String())
+	}
+	remaining := getHandlerUserVault(t, ts, manager.User.ID, vault.ID)
+	if remaining.Permission != models.PermissionManager {
+		t.Fatalf("permission after rejected demotion = %d, want manager", remaining.Permission)
+	}
+}
+
+func TestAccountAdministratorCannotDeleteSoleVaultManager(t *testing.T) {
+	ts := setupTestServer(t)
+	adminToken, admin := ts.registerTestUser(t, "delete-manager-account-admin@example.com")
+	vault := ts.createTestVault(t, adminToken, "Account Guard Vault")
+	target := createSecondUser(t, ts, admin.User.AccountID, "delete-manager-target@example.com", false)
+	if err := ts.db.Model(&models.UserVault{}).
+		Where("vault_id = ? AND user_id = ?", vault.ID, admin.User.ID).
+		Update("permission", models.PermissionEditor).Error; err != nil {
+		t.Fatalf("demote fixture owner: %v", err)
+	}
+	addUserToVault(t, ts, target.ID, vault.ID, models.PermissionManager)
+
+	path := fmt.Sprintf("/api/settings/users/%s", target.ID)
+	rec := ts.doRequest(http.MethodDelete, path, "", adminToken)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 deleting sole manager, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -2236,6 +2310,15 @@ func TestViewerCannotBulkMoveContacts(t *testing.T) {
 	}
 }
 
+func TestViewerCannotBulkDeleteContacts(t *testing.T) {
+	ts, _, viewerToken, vaultID, contactID := setupViewerTest(t)
+	path := fmt.Sprintf("/api/vaults/%s/contacts", vaultID)
+	rec := ts.doRequest(http.MethodDelete, path, fmt.Sprintf(`{"contact_ids":[%q]}`, contactID), viewerToken)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for Viewer bulk deleting contacts, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestBulkContactMoveTargetVaultInsufficientPermissionReturns403(t *testing.T) {
 	ts := setupTestServer(t)
 	token, auth := ts.registerTestUser(t, "bulk-move-target-viewer-manager@example.com")
@@ -2340,36 +2423,26 @@ func TestContactMoveCrossAccountTargetReturns403(t *testing.T) {
 	assertHandlerContactVault(t, ts, contact.ID, sourceVault.ID)
 }
 
-func TestContactMoveShadowSelfContactReturnsNotFound(t *testing.T) {
+func TestContactMoveProtectedContactReturnsNotFound(t *testing.T) {
 	ts := setupTestServer(t)
-	token, auth := ts.registerTestUser(t, "move-shadow-self@example.com")
-	sourceVault := ts.createTestVault(t, token, "Shadow Source Vault")
-	targetVault := ts.createTestVault(t, token, "Shadow Target Vault")
-	sourceUserVault := getHandlerUserVault(t, ts, auth.User.ID, sourceVault.ID)
-	targetUserVault := getHandlerUserVault(t, ts, auth.User.ID, targetVault.ID)
-	shadowContactID := sourceUserVault.ContactID
-	if shadowContactID == "" {
-		t.Fatal("expected source UserVault.ContactID to be populated")
+	token, _ := ts.registerTestUser(t, "move-protected@example.com")
+	sourceVault := ts.createTestVault(t, token, "Protected Source Vault")
+	targetVault := ts.createTestVault(t, token, "Protected Target Vault")
+	contact := ts.createTestContact(t, token, sourceVault.ID, "Protected")
+	if err := ts.db.Model(&models.Contact{}).Where("id = ?", contact.ID).Update("can_be_deleted", false).Error; err != nil {
+		t.Fatalf("protect contact: %v", err)
 	}
 
-	path := fmt.Sprintf("/api/vaults/%s/contacts/%s/move", sourceVault.ID, shadowContactID)
+	path := fmt.Sprintf("/api/vaults/%s/contacts/%s/move", sourceVault.ID, contact.ID)
 	rec := ts.doRequest(http.MethodPost, path, fmt.Sprintf(`{"target_vault_id":%q}`, targetVault.ID), token)
 	if rec.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 for shadow self-contact move, got %d: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 404 for protected contact move, got %d: %s", rec.Code, rec.Body.String())
 	}
 	resp := parseResponse(t, rec)
 	if resp.Error == nil || resp.Error.Code != "NOT_FOUND" {
 		t.Fatalf("expected NOT_FOUND error, got %+v", resp.Error)
 	}
-	assertHandlerContactVault(t, ts, shadowContactID, sourceVault.ID)
-	reloadedSourceUserVault := getHandlerUserVault(t, ts, auth.User.ID, sourceVault.ID)
-	reloadedTargetUserVault := getHandlerUserVault(t, ts, auth.User.ID, targetVault.ID)
-	if reloadedSourceUserVault.ContactID != sourceUserVault.ContactID {
-		t.Fatalf("expected source UserVault.ContactID to remain %s, got %s", sourceUserVault.ContactID, reloadedSourceUserVault.ContactID)
-	}
-	if reloadedTargetUserVault.ContactID != targetUserVault.ContactID {
-		t.Fatalf("expected target UserVault.ContactID to remain %s, got %s", targetUserVault.ContactID, reloadedTargetUserVault.ContactID)
-	}
+	assertHandlerContactVault(t, ts, contact.ID, sourceVault.ID)
 }
 
 func TestViewerCannotUpdateContactTemplate(t *testing.T) {
@@ -2636,30 +2709,54 @@ func TestCrossVaultGoalBlocked(t *testing.T) {
 	}
 }
 
-func TestCrossVaultTimelineEventBlocked(t *testing.T) {
+func TestCrossVaultActivityBlocked(t *testing.T) {
 	ts := setupTestServer(t)
 	token, _ := ts.registerTestUser(t, "xvault-timeline@example.com")
 	vault1 := ts.createTestVault(t, token, "Timeline Vault A")
-	contact1 := ts.createTestContact(t, token, vault1.ID, "TimelineContact")
+	contact1 := ts.createTestContact(t, token, vault1.ID, "ActivityContact")
 	vault2 := ts.createTestVault(t, token, "Timeline Vault B")
+	var typeID uint
+	ts.db.Table("activity_types").
+		Joins("JOIN activity_categories ON activity_categories.id = activity_types.activity_category_id").
+		Where("activity_categories.vault_id = ?", vault2.ID).
+		Pluck("activity_types.id", &typeID)
 
-	path := fmt.Sprintf("/api/vaults/%s/contacts/%s/timelineEvents", vault2.ID, contact1.ID)
-	body := `{"label":"Test Event","started_at":"2025-01-01T00:00:00Z"}`
+	path := fmt.Sprintf("/api/vaults/%s/activities", vault2.ID)
+	body := fmt.Sprintf(`{"activity_type_id":%d,"primary_contact_id":%q,"title":"Test Event","start_date":"2025-01-01T00:00:00Z","start_precision":"day","end_status":"none"}`, typeID, contact1.ID)
 	rec := ts.doRequest(http.MethodPost, path, body, token)
 	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404 for cross-vault timeline event create, got %d: %s", rec.Code, rec.Body.String())
+		t.Errorf("expected 404 for cross-vault activity create, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
-func TestCrossVaultMoodEventBlocked(t *testing.T) {
+func TestCrossVaultActivityDetailBlocked(t *testing.T) {
+	ts := setupTestServer(t)
+	token, _ := ts.registerTestUser(t, "xvault-activity-detail@example.com")
+	vaultA := ts.createTestVault(t, token, "Activity Detail A")
+	vaultB := ts.createTestVault(t, token, "Activity Detail B")
+	activity := models.Activity{VaultID: vaultA.ID, Title: "Private activity"}
+	if err := ts.db.Create(&activity).Error; err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+
+	rec := ts.doRequest(http.MethodGet, fmt.Sprintf("/api/vaults/%s/activities/%d", vaultB.ID, activity.ID), "", token)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected cross-vault activity detail 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCrossVaultMoodParameterBlocked(t *testing.T) {
 	ts := setupTestServer(t)
 	token, _ := ts.registerTestUser(t, "xvault-mood@example.com")
 	vault1 := ts.createTestVault(t, token, "Mood Vault A")
-	contact1 := ts.createTestContact(t, token, vault1.ID, "MoodContact")
 	vault2 := ts.createTestVault(t, token, "Mood Vault B")
+	var parameterID uint
+	if err := ts.db.Model(&models.MoodTrackingParameter{}).Where("vault_id = ?", vault1.ID).Order("id").Pluck("id", &parameterID).Error; err != nil {
+		t.Fatalf("load source mood parameter: %v", err)
+	}
 
-	path := fmt.Sprintf("/api/vaults/%s/contacts/%s/moodTrackingEvents", vault2.ID, contact1.ID)
-	body := `{"mood_tracking_parameter_id":1,"rated_at":"2025-01-01T00:00:00Z","note":"test"}`
+	path := fmt.Sprintf("/api/vaults/%s/moodTrackingEvents", vault2.ID)
+	body := fmt.Sprintf(`{"mood_tracking_parameter_id":%d,"rated_at":"2025-01-01T00:00:00Z","note":"test"}`, parameterID)
 	rec := ts.doRequest(http.MethodPost, path, body, token)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("expected 404 for cross-vault mood event create, got %d: %s", rec.Code, rec.Body.String())
@@ -2774,6 +2871,68 @@ func TestViewerCannotCreateDavSubscription(t *testing.T) {
 	}
 }
 
+func TestEditorCannotReadOrManageVaultDavIntegration(t *testing.T) {
+	ts, _, editorToken, vaultID, _ := setupEditorTest(t)
+	base := fmt.Sprintf("/api/vaults/%s/dav/subscriptions", vaultID)
+	tests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodGet, base, ""},
+		{http.MethodPost, base, `{}`},
+		{http.MethodPost, base + "/test", `{}`},
+		{http.MethodGet, base + "/missing", ""},
+		{http.MethodPut, base + "/missing", `{}`},
+		{http.MethodDelete, base + "/missing", ""},
+		{http.MethodPost, base + "/missing/sync", ""},
+		{http.MethodGet, base + "/missing/logs", ""},
+	}
+	for _, test := range tests {
+		rec := ts.doRequest(test.method, test.path, test.body, editorToken)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s: expected 403, got %d: %s", test.method, test.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestEditorCannotManageSharedContactLayouts(t *testing.T) {
+	ts, _, editorToken, vaultID, _ := setupEditorTest(t)
+	var template models.VaultContactTemplate
+	if err := ts.db.Where("vault_id = ?", vaultID).Order("id").First(&template).Error; err != nil {
+		t.Fatalf("load contact layout: %v", err)
+	}
+	templateID := template.ID
+	base := fmt.Sprintf("/api/vaults/%s/contact-layout/templates", vaultID)
+	tests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPost, base, `{"name":"Editor layout"}`},
+		{http.MethodPut, fmt.Sprintf("%s/%d", base, templateID), `{"name":"Changed"}`},
+		{http.MethodPut, fmt.Sprintf("%s/%d/layout", base, templateID), `{"expected_revision":1,"pages":[]}`},
+		{http.MethodPut, fmt.Sprintf("%s/%d/default", base, templateID), ""},
+		{http.MethodDelete, fmt.Sprintf("%s/%d", base, templateID), ""},
+	}
+	for _, test := range tests {
+		rec := ts.doRequest(test.method, test.path, test.body, editorToken)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s %s: expected 403, got %d: %s", test.method, test.path, rec.Code, rec.Body.String())
+		}
+	}
+	for _, path := range []string{
+		fmt.Sprintf("/api/vaults/%s/contact-layout/modules", vaultID),
+		base,
+		fmt.Sprintf("%s/%d", base, templateID),
+	} {
+		rec := ts.doRequest(http.MethodGet, path, "", editorToken)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("Editor should read effective layouts at %s, got %d: %s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestViewerCannotCreateLifeMetric(t *testing.T) {
 	ts, _, viewerToken, vaultID, _ := setupViewerTest(t)
 	path := fmt.Sprintf("/api/vaults/%s/lifeMetrics", vaultID)
@@ -2840,16 +2999,6 @@ func TestViewerCannotCreatePostTag(t *testing.T) {
 	}
 }
 
-func TestViewerCannotUpdateDefaultTab(t *testing.T) {
-	ts, _, viewerToken, vaultID, _ := setupViewerTest(t)
-	path := fmt.Sprintf("/api/vaults/%s/defaultTab", vaultID)
-	body := `{"default_tab":"feed"}`
-	rec := ts.doRequest(http.MethodPut, path, body, viewerToken)
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("expected 403 for Viewer updating default tab, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
 func TestViewerCannotAddContactToGroup(t *testing.T) {
 	ts, _, viewerToken, vaultID, contactID := setupViewerTest(t)
 	path := fmt.Sprintf("/api/vaults/%s/contacts/%s/groups", vaultID, contactID)
@@ -2857,6 +3006,27 @@ func TestViewerCannotAddContactToGroup(t *testing.T) {
 	rec := ts.doRequest(http.MethodPost, path, body, viewerToken)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("expected 403 for Viewer adding contact to group, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestViewerCannotManageGroupMembers(t *testing.T) {
+	ts, adminToken, viewerToken, vaultID, contactID := setupViewerTest(t)
+	groupID := createTestGroup(t, ts, vaultID, "Viewer Group Members")
+	path := fmt.Sprintf("/api/vaults/%s/groups/%d/members", vaultID, groupID)
+	body := fmt.Sprintf(`{"contact_ids":["%s"]}`, contactID)
+
+	rec := ts.doRequest(http.MethodPost, path, body, viewerToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for Viewer adding group members, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if rec := ts.doRequest(http.MethodPost, path, body, adminToken); rec.Code != http.StatusOK {
+		t.Fatalf("expected admin to add group members, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = ts.doRequest(http.MethodDelete, path, body, viewerToken)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for Viewer removing group members, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -2945,9 +3115,21 @@ func TestCrossAccountCompanyGetBlocked(t *testing.T) {
 
 // ==================== AK. Instance Admin Route Protection ====================
 
+func registerNonInstanceAdminTestUser(t *testing.T, ts *testServer, email string) authData {
+	t.Helper()
+	_, auth := ts.registerTestUser(t, email)
+	// The first registered test user is bootstrapped as instance admin; revoke it in DB because authorization uses current DB privileges.
+	if err := ts.db.Model(&models.User{}).
+		Where("id = ?", auth.User.ID).
+		Update("is_instance_administrator", false).Error; err != nil {
+		t.Fatalf("revoke test user instance administrator privilege: %v", err)
+	}
+	return auth
+}
+
 func TestNonInstanceAdminCannotListAdminUsers(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-list-users@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-list-users@example.com")
 	// Account admin but NOT instance admin
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
@@ -2959,7 +3141,7 @@ func TestNonInstanceAdminCannotListAdminUsers(t *testing.T) {
 
 func TestNonInstanceAdminCannotToggleUser(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-toggle@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-toggle@example.com")
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
 	rec := ts.doRequest(http.MethodPut, "/api/admin/users/fake-id/toggle", "", token)
@@ -2970,7 +3152,7 @@ func TestNonInstanceAdminCannotToggleUser(t *testing.T) {
 
 func TestNonInstanceAdminCannotSetAdmin(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-setadmin@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-setadmin@example.com")
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
 	rec := ts.doRequest(http.MethodPut, "/api/admin/users/fake-id/admin", `{"is_instance_admin":true}`, token)
@@ -2981,7 +3163,7 @@ func TestNonInstanceAdminCannotSetAdmin(t *testing.T) {
 
 func TestNonInstanceAdminCannotDeleteUser(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-deluser@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-deluser@example.com")
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
 	rec := ts.doRequest(http.MethodDelete, "/api/admin/users/fake-id", "", token)
@@ -2992,7 +3174,7 @@ func TestNonInstanceAdminCannotDeleteUser(t *testing.T) {
 
 func TestNonInstanceAdminCannotGetAdminSettings(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-settings@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-settings@example.com")
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
 	rec := ts.doRequest(http.MethodGet, "/api/admin/settings", "", token)
@@ -3003,7 +3185,7 @@ func TestNonInstanceAdminCannotGetAdminSettings(t *testing.T) {
 
 func TestNonInstanceAdminCannotUpdateAdminSettings(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-upd-settings@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-upd-settings@example.com")
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
 	rec := ts.doRequest(http.MethodPut, "/api/admin/settings", `{"key":"value"}`, token)
@@ -3014,7 +3196,7 @@ func TestNonInstanceAdminCannotUpdateAdminSettings(t *testing.T) {
 
 func TestNonInstanceAdminCannotSetStorageLimit(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-storage@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-storage@example.com")
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
 	rec := ts.doRequest(http.MethodPut, "/api/admin/users/fake-id/storage-limit", `{"limit":1000}`, token)
@@ -3025,7 +3207,7 @@ func TestNonInstanceAdminCannotSetStorageLimit(t *testing.T) {
 
 func TestNonInstanceAdminCannotManageOAuthProviders(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-oauth@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-oauth@example.com")
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
 	rec := ts.doRequest(http.MethodGet, "/api/admin/oauth-providers", "", token)
@@ -3041,7 +3223,7 @@ func TestNonInstanceAdminCannotManageOAuthProviders(t *testing.T) {
 
 func TestNonInstanceAdminCannotManageBackups(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-backup@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-backup@example.com")
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
 	rec := ts.doRequest(http.MethodGet, "/api/admin/backups", "", token)
@@ -3057,7 +3239,7 @@ func TestNonInstanceAdminCannotManageBackups(t *testing.T) {
 
 func TestNonInstanceAdminCannotRebuildSearchIndex(t *testing.T) {
 	ts := setupTestServer(t)
-	_, auth := ts.registerTestUser(t, "non-ia-search@example.com")
+	auth := registerNonInstanceAdminTestUser(t, ts, "non-ia-search@example.com")
 	token := generateJWTFull(auth.User.ID, auth.User.AccountID, auth.User.Email, true, false, false)
 
 	rec := ts.doRequest(http.MethodPost, "/api/admin/search/rebuild", "", token)
@@ -3327,7 +3509,7 @@ func TestInvalidPermissionValueRejectedOnAddVaultUser(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			path := fmt.Sprintf("/api/vaults/%s/settings/users", vault.ID)
+			path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vault.ID)
 			body := fmt.Sprintf(`{"email":"victim-%s@example.com","permission":%d}`, tc.name, tc.permission)
 			rec := ts.doRequest(http.MethodPost, path, body, adminToken)
 			if rec.Code != http.StatusUnprocessableEntity {
@@ -3367,7 +3549,7 @@ func TestValidPermissionValuesAccepted(t *testing.T) {
 	vault := ts.createTestVault(t, adminToken, "PermValid Vault")
 
 	for _, perm := range []int{100, 200, 300} {
-		path := fmt.Sprintf("/api/vaults/%s/settings/users", vault.ID)
+		path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vault.ID)
 		body := fmt.Sprintf(`{"email":"valid-perm-%d@example.com","permission":%d}`, perm, perm)
 		rec := ts.doRequest(http.MethodPost, path, body, adminToken)
 		// 用户可能不存在 → 404，但不应该是 422（校验错误）
@@ -3379,16 +3561,21 @@ func TestValidPermissionValuesAccepted(t *testing.T) {
 
 // ==================== AP. Cross-Account Add User to Vault ====================
 
-func TestCrossAccountAddUserToVaultBlocked(t *testing.T) {
+func TestCrossAccountUserRequiresInvitationAcceptance(t *testing.T) {
 	ts := setupTestServer(t)
 	adminToken1, _ := ts.registerTestUser(t, "xacct-vault-admin@example.com")
 	vault1 := ts.createTestVault(t, adminToken1, "XAcct Vault")
 	ts.registerTestUser(t, "xacct-victim@example.com")
 
-	path := fmt.Sprintf("/api/vaults/%s/settings/users", vault1.ID)
+	path := fmt.Sprintf("/api/vaults/%s/settings/invitations", vault1.ID)
 	body := `{"email":"xacct-victim@example.com","permission":300}`
 	rec := ts.doRequest(http.MethodPost, path, body, adminToken1)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404 for cross-account add user to vault, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusCreated {
+		t.Errorf("expected 201 for scoped invitation, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var membership int64
+	ts.db.Model(&models.UserVault{}).Where("vault_id = ?", vault1.ID).Count(&membership)
+	if membership != 1 {
+		t.Errorf("inviting an existing user must not grant access before acceptance: %d members", membership)
 	}
 }

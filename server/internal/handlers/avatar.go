@@ -3,9 +3,8 @@ package handlers
 import (
 	"errors"
 	"net/http"
-	"path/filepath"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/middleware"
 	"github.com/naiba/bonds/internal/models"
@@ -39,7 +38,7 @@ func NewAvatarHandler(db *gorm.DB, vaultFileService *services.VaultFileService) 
 //	@Success		200			{file}		file
 //	@Failure		404			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{contact_id}/avatar [get]
-func (h *AvatarHandler) GetAvatar(c echo.Context) error {
+func (h *AvatarHandler) GetAvatar(c *echo.Context) error {
 	contactID := c.Param("contact_id")
 	vaultID := c.Param("vault_id")
 	userID := middleware.GetUserID(c)
@@ -50,14 +49,12 @@ func (h *AvatarHandler) GetAvatar(c echo.Context) error {
 	}
 
 	if contact.FileID != nil {
-		var file models.File
-		if err := h.db.First(&file, *contact.FileID).Error; err == nil {
-			filePath := filepath.Join(h.vaultFileService.UploadDir(), file.UUID)
-			return c.File(filePath)
+		if _, filePath, err := h.vaultFileService.ResolvePath(*contact.FileID, vaultID); err == nil {
+			return serveLocalFile(c, filePath)
 		}
 	}
 
-	nameOrder, err := services.GetEffectiveVaultNameOrder(h.db, vaultID, userID)
+	nameOrder, err := services.GetUserNameOrder(h.db, userID)
 	if err != nil {
 		if errors.Is(err, services.ErrUserNotFound) {
 			return response.NotFound(c, "err.user_not_found")
@@ -89,7 +86,7 @@ func (h *AvatarHandler) GetAvatar(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{contact_id}/avatar [put]
-func (h *AvatarHandler) UpdateAvatar(c echo.Context) error {
+func (h *AvatarHandler) UpdateAvatar(c *echo.Context) error {
 	contactID := c.Param("contact_id")
 	vaultID := c.Param("vault_id")
 
@@ -141,7 +138,7 @@ func (h *AvatarHandler) UpdateAvatar(c echo.Context) error {
 //	@Failure		404			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
 //	@Router			/vaults/{vault_id}/contacts/{contact_id}/avatar [delete]
-func (h *AvatarHandler) DeleteAvatar(c echo.Context) error {
+func (h *AvatarHandler) DeleteAvatar(c *echo.Context) error {
 	contactID := c.Param("contact_id")
 	vaultID := c.Param("vault_id")
 

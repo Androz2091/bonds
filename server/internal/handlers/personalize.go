@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/naiba/bonds/internal/dto"
 	"github.com/naiba/bonds/internal/middleware"
 	"github.com/naiba/bonds/internal/services"
@@ -32,8 +32,25 @@ func NewPersonalizeHandler(personalizeService *services.PersonalizeService) *Per
 //	@Failure		404		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
 //	@Router			/settings/personalize/{entity} [get]
-func (h *PersonalizeHandler) List(c echo.Context) error {
+func (h *PersonalizeHandler) List(c *echo.Context) error {
 	accountID := middleware.GetAccountID(c)
+	return h.listForAccount(c, accountID)
+}
+
+// ListForVault godoc
+//
+// @Summary List reference values belonging to an accessible vault's account
+// @Tags personalize
+// @Security BearerAuth
+// @Param vault_id path string true "Vault ID"
+// @Param entity path string true "Entity type"
+// @Success 200 {object} response.APIResponse
+// @Router /vaults/{vault_id}/personalize/{entity} [get]
+func (h *PersonalizeHandler) ListForVault(c *echo.Context) error {
+	return h.listForAccount(c, middleware.GetVaultAccountID(c))
+}
+
+func (h *PersonalizeHandler) listForAccount(c *echo.Context, accountID string) error {
 	entity := c.Param("entity")
 
 	items, err := h.personalizeService.List(accountID, entity)
@@ -62,7 +79,7 @@ func (h *PersonalizeHandler) List(c echo.Context) error {
 //	@Failure		404		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
 //	@Router			/settings/personalize/{entity} [post]
-func (h *PersonalizeHandler) Create(c echo.Context) error {
+func (h *PersonalizeHandler) Create(c *echo.Context) error {
 	accountID := middleware.GetAccountID(c)
 	entity := c.Param("entity")
 	var req dto.PersonalizeEntityRequest
@@ -73,6 +90,9 @@ func (h *PersonalizeHandler) Create(c echo.Context) error {
 	if err != nil {
 		if errors.Is(err, services.ErrUnknownEntityType) {
 			return response.NotFound(c, "err.unknown_entity_type")
+		}
+		if errors.Is(err, services.ErrCurrenciesNotEditable) {
+			return response.BadRequest(c, "err.currencies_not_editable", nil)
 		}
 		return response.InternalError(c, "err.failed_to_create_entity")
 	}
@@ -96,7 +116,7 @@ func (h *PersonalizeHandler) Create(c echo.Context) error {
 //	@Failure		404		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
 //	@Router			/settings/personalize/{entity}/{id} [put]
-func (h *PersonalizeHandler) Update(c echo.Context) error {
+func (h *PersonalizeHandler) Update(c *echo.Context) error {
 	accountID := middleware.GetAccountID(c)
 	entity := c.Param("entity")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -114,6 +134,9 @@ func (h *PersonalizeHandler) Update(c echo.Context) error {
 		}
 		if errors.Is(err, services.ErrPersonalizeEntityNotFound) {
 			return response.NotFound(c, "err.entity_not_found")
+		}
+		if errors.Is(err, services.ErrCurrenciesNotEditable) {
+			return response.BadRequest(c, "err.currencies_not_editable", nil)
 		}
 		return response.InternalError(c, "err.failed_to_update_entity")
 	}
@@ -134,7 +157,7 @@ func (h *PersonalizeHandler) Update(c echo.Context) error {
 //	@Failure		404		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
 //	@Router			/settings/personalize/{entity}/{id} [delete]
-func (h *PersonalizeHandler) Delete(c echo.Context) error {
+func (h *PersonalizeHandler) Delete(c *echo.Context) error {
 	accountID := middleware.GetAccountID(c)
 	entity := c.Param("entity")
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -148,6 +171,9 @@ func (h *PersonalizeHandler) Delete(c echo.Context) error {
 		if errors.Is(err, services.ErrPersonalizeEntityNotFound) {
 			return response.NotFound(c, "err.entity_not_found")
 		}
+		if errors.Is(err, services.ErrCurrenciesNotEditable) {
+			return response.BadRequest(c, "err.currencies_not_editable", nil)
+		}
 		return response.InternalError(c, "err.failed_to_delete_entity")
 	}
 	return response.NoContent(c)
@@ -156,19 +182,30 @@ func (h *PersonalizeHandler) Delete(c echo.Context) error {
 // SyncTranslations godoc
 //
 //	@Summary		Sync seeded entity translations
-//	@Description	Re-translate all default seeded labels to match the current locale (from Accept-Language header). Custom labels are not affected.
+//	@Description	Re-translate shared seeded labels to an explicitly selected shared data locale. Custom labels are not affected.
 //	@Tags			personalize
 //	@Produce		json
 //	@Security		BearerAuth
+//	@Param			request	body		dto.SyncSharedTranslationsRequest	true	"Shared data locale"
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		401	{object}	response.APIResponse
+//	@Failure		422	{object}	response.APIResponse
 //	@Failure		500	{object}	response.APIResponse
 //	@Router			/settings/personalize/sync [post]
-func (h *PersonalizeHandler) SyncTranslations(c echo.Context) error {
+func (h *PersonalizeHandler) SyncTranslations(c *echo.Context) error {
 	accountID := middleware.GetAccountID(c)
-	locale := middleware.GetLocale(c)
+	var req dto.SyncSharedTranslationsRequest
+	if err := c.Bind(&req); err != nil {
+		return response.BadRequest(c, "err.invalid_request_body", nil)
+	}
+	if err := validateRequest(req); err != nil {
+		return response.ValidationError(c, map[string]string{"validation": err.Error()})
+	}
 
-	if err := h.personalizeService.SyncAllTranslations(accountID, locale); err != nil {
+	if err := h.personalizeService.SyncAllTranslations(accountID, req.Locale); err != nil {
+		if errors.Is(err, services.ErrUnsupportedLocale) {
+			return response.ValidationError(c, map[string]string{"locale": err.Error()})
+		}
 		return response.InternalError(c, "err.failed_to_sync_translations")
 	}
 	return response.OK(c, nil)

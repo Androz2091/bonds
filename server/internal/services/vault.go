@@ -30,10 +30,8 @@ func (s *VaultService) ListVaults(userID string) ([]dto.VaultResponse, error) {
 	}
 
 	vaultIDs := make([]string, len(userVaults))
-	contactIDByVault := make(map[string]string, len(userVaults))
 	for i, uv := range userVaults {
 		vaultIDs[i] = uv.VaultID
-		contactIDByVault[uv.VaultID] = uv.ContactID
 	}
 
 	if len(vaultIDs) == 0 {
@@ -44,14 +42,13 @@ func (s *VaultService) ListVaults(userID string) ([]dto.VaultResponse, error) {
 	if err := s.db.Where("id IN ?", vaultIDs).Find(&vaults).Error; err != nil {
 		return nil, err
 	}
-	userNameOrder, err := getUserNameOrder(s.db, userID)
-	if err != nil {
-		return nil, err
-	}
-
 	result := make([]dto.VaultResponse, len(vaults))
+	permissions := make(map[string]int, len(userVaults))
+	for _, membership := range userVaults {
+		permissions[membership.VaultID] = membership.Permission
+	}
 	for i, v := range vaults {
-		result[i] = toVaultResponse(&v, contactIDByVault[v.ID], userNameOrder)
+		result[i] = toVaultResponse(&v, permissions[v.ID])
 	}
 	return result, nil
 }
@@ -65,7 +62,6 @@ func (s *VaultService) CreateVault(accountID, userID string, req dto.CreateVault
 		Type:        "personal",
 	}
 
-	var userContactID string
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&vault).Error; err != nil {
 			return err
@@ -79,29 +75,13 @@ func (s *VaultService) CreateVault(accountID, userID string, req dto.CreateVault
 			return err
 		}
 
-		// Monica v5 pattern: auto-create a "self" Contact for the vault creator,
-		// linked via UserVault.ContactID. This shadow contact (Listed=false, CanBeDeleted=false)
-		// is used for mood tracking, life events, etc.
-		contactID, err := createUserSelfContact(tx, userID, vault.ID)
-		if err != nil {
-			return err
-		}
-		userContactID = contactID
-		if err := tx.Model(&userVault).Update("contact_id", contactID).Error; err != nil {
-			return err
-		}
-
 		return models.SeedVaultDefaults(tx, vault.ID, locale)
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	userNameOrder, err := getUserNameOrder(s.db, userID)
-	if err != nil {
-		return nil, err
-	}
-	resp := toVaultResponse(&vault, userContactID, userNameOrder)
+	resp := toVaultResponse(&vault, models.PermissionManager)
 	return &resp, nil
 }
 
@@ -113,12 +93,11 @@ func (s *VaultService) GetVault(vaultID, userID string) (*dto.VaultResponse, err
 		}
 		return nil, err
 	}
-	userContactID := s.getUserContactID(userID, vaultID)
-	userNameOrder, err := getUserNameOrder(s.db, userID)
+	permission, err := getUserVaultPermission(s.db, userID, vaultID)
 	if err != nil {
 		return nil, err
 	}
-	resp := toVaultResponse(&vault, userContactID, userNameOrder)
+	resp := toVaultResponse(&vault, permission)
 	return &resp, nil
 }
 
@@ -139,12 +118,11 @@ func (s *VaultService) UpdateVault(vaultID, userID string, req dto.UpdateVaultRe
 		return nil, err
 	}
 
-	userContactID := s.getUserContactID(userID, vaultID)
-	userNameOrder, err := getUserNameOrder(s.db, userID)
+	permission, err := getUserVaultPermission(s.db, userID, vaultID)
 	if err != nil {
 		return nil, err
 	}
-	resp := toVaultResponse(&vault, userContactID, userNameOrder)
+	resp := toVaultResponse(&vault, permission)
 	return &resp, nil
 }
 
@@ -167,10 +145,10 @@ func (s *VaultService) DeleteVault(vaultID string) error {
 //
 // Deletion order rationale:
 //  1. Collect all contact IDs in the vault (including soft-deleted contacts)
-//  2. Delete deepest children first: ContactReminderScheduled, Streaks, LifeEvents,
+//  2. Delete deepest children first: ContactReminderScheduled, Streaks, Activities,
 //     PostMetrics, PostSections, PostTags, etc.
 //  3. Delete contact-level children: reminders, goals, notes, tasks, pivots, etc.
-//  4. Delete vault-level children: journals, timeline events, labels, etc.
+//  4. Delete vault-level children: journals, activities, labels, etc.
 //  5. Delete contacts themselves
 //  6. Delete the vault
 func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
@@ -182,18 +160,25 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 		Pluck("id", &contactIDs).Error; err != nil {
 		return fmt.Errorf("collect contacts: %w", err)
 	}
+	if err := tx.Where("vault_id = ?", vaultID).Delete(&models.MoodTrackingEvent{}).Error; err != nil {
+		return fmt.Errorf("delete MoodTrackingEvent: %w", err)
+	}
 
 	// Step 2: Delete contact-level children (deepest grandchildren first).
 	if len(contactIDs) > 0 {
 		// --- Grandchildren (depend on contact children) ---
 
-		// ContactReminderScheduled → depends on ContactReminder
+		// Reminder schedules and selected recipients depend on ContactReminder.
 		if err := tx.Where("contact_reminder_id IN (?)",
 			tx.Model(&models.ContactReminder{}).Select("id").Where("contact_id IN ?", contactIDs),
 		).Delete(&models.ContactReminderScheduled{}).Error; err != nil {
 			return fmt.Errorf("delete ContactReminderScheduled: %w", err)
 		}
-
+		if err := tx.Where("contact_reminder_id IN (?)",
+			tx.Model(&models.ContactReminder{}).Select("id").Where("contact_id IN ?", contactIDs),
+		).Delete(&models.ContactReminderSelectedUser{}).Error; err != nil {
+			return fmt.Errorf("delete ContactReminderSelectedUser: %w", err)
+		}
 		// Streak → depends on Goal
 		if err := tx.Where("goal_id IN (?)",
 			tx.Model(&models.Goal{}).Select("id").Where("contact_id IN ?", contactIDs),
@@ -213,7 +198,6 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 			&models.Goal{},
 			&models.Gift{},
 			&models.Relationship{},
-			&models.MoodTrackingEvent{},
 			&models.QuickFact{},
 			&models.Note{}, // Note has both contact_id and vault_id; delete by contact_id here
 		}
@@ -250,8 +234,7 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 			&models.ContactPost{},
 			&models.ContactCompany{},
 			&models.ContactLifeMetric{},
-			&models.LifeEventParticipant{},
-			&models.TimelineEventParticipant{},
+			&models.ActivityParticipant{},
 			&models.ContactSubscriptionState{},
 		}
 		for _, m := range contactPivotModels {
@@ -279,6 +262,9 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 	}
 
 	// Step 3: Delete vault-level children (grandchildren of vault-scoped tables first).
+	if err := tx.Where("vault_id = ?", vaultID).Delete(&models.ContentFileReference{}).Error; err != nil {
+		return fmt.Errorf("delete ContentFileReference: %w", err)
+	}
 
 	// Journal cascade: PostMetric → PostSection → PostTag → ContactPost → Post → SliceOfLife → JournalMetric → Journal
 	var journalIDs []uint
@@ -327,43 +313,32 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 		}
 	}
 
-	// LifeEventCategory cascade: LifeEvent → LifeEventType → LifeEventCategory
+	// ActivityCategory cascade: Activity participants → Activity → ActivityType → ActivityCategory
+	if err := tx.Where("activity_id IN (?)", tx.Model(&models.Activity{}).Select("id").Where("vault_id = ?", vaultID)).Delete(&models.ActivityParticipant{}).Error; err != nil {
+		return fmt.Errorf("delete ActivityParticipant: %w", err)
+	}
+	if err := tx.Where("vault_id = ?", vaultID).Delete(&models.Activity{}).Error; err != nil {
+		return fmt.Errorf("delete Activity: %w", err)
+	}
 	var categoryIDs []uint
-	if err := tx.Model(&models.LifeEventCategory{}).Where("vault_id = ?", vaultID).Pluck("id", &categoryIDs).Error; err != nil {
-		return fmt.Errorf("pluck LifeEventCategory ids: %w", err)
+	if err := tx.Model(&models.ActivityCategory{}).Where("vault_id = ?", vaultID).Pluck("id", &categoryIDs).Error; err != nil {
+		return fmt.Errorf("pluck ActivityCategory ids: %w", err)
 	}
 	if len(categoryIDs) > 0 {
 		var typeIDs []uint
-		if err := tx.Model(&models.LifeEventType{}).Where("life_event_category_id IN ?", categoryIDs).Pluck("id", &typeIDs).Error; err != nil {
-			return fmt.Errorf("pluck LifeEventType ids: %w", err)
+		if err := tx.Model(&models.ActivityType{}).Where("activity_category_id IN ?", categoryIDs).Pluck("id", &typeIDs).Error; err != nil {
+			return fmt.Errorf("pluck ActivityType ids: %w", err)
 		}
 		if len(typeIDs) > 0 {
-			if err := tx.Where("life_event_type_id IN ?", typeIDs).Delete(&models.LifeEvent{}).Error; err != nil {
-				return fmt.Errorf("delete LifeEvent by life_event_type_id: %w", err)
+			if err := tx.Where("activity_type_id IN ?", typeIDs).Delete(&models.Activity{}).Error; err != nil {
+				return fmt.Errorf("delete Activity by activity_type_id: %w", err)
 			}
-			if err := tx.Where("id IN ?", typeIDs).Delete(&models.LifeEventType{}).Error; err != nil {
-				return fmt.Errorf("delete LifeEventType: %w", err)
+			if err := tx.Where("id IN ?", typeIDs).Delete(&models.ActivityType{}).Error; err != nil {
+				return fmt.Errorf("delete ActivityType: %w", err)
 			}
 		}
-		if err := tx.Where("id IN ?", categoryIDs).Delete(&models.LifeEventCategory{}).Error; err != nil {
-			return fmt.Errorf("delete LifeEventCategory: %w", err)
-		}
-	}
-
-	// TimelineEvent cascade: LifeEvent (by timeline_event_id) → TimelineEventParticipant → TimelineEvent
-	var timelineIDs []uint
-	if err := tx.Model(&models.TimelineEvent{}).Where("vault_id = ?", vaultID).Pluck("id", &timelineIDs).Error; err != nil {
-		return fmt.Errorf("pluck TimelineEvent ids: %w", err)
-	}
-	if len(timelineIDs) > 0 {
-		if err := tx.Where("timeline_event_id IN ?", timelineIDs).Delete(&models.LifeEvent{}).Error; err != nil {
-			return fmt.Errorf("delete LifeEvent by timeline_event_id: %w", err)
-		}
-		if err := tx.Where("timeline_event_id IN ?", timelineIDs).Delete(&models.TimelineEventParticipant{}).Error; err != nil {
-			return fmt.Errorf("delete TimelineEventParticipant: %w", err)
-		}
-		if err := tx.Where("id IN ?", timelineIDs).Delete(&models.TimelineEvent{}).Error; err != nil {
-			return fmt.Errorf("delete TimelineEvent: %w", err)
+		if err := tx.Where("id IN ?", categoryIDs).Delete(&models.ActivityCategory{}).Error; err != nil {
+			return fmt.Errorf("delete ActivityCategory: %w", err)
 		}
 	}
 
@@ -496,6 +471,28 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 		return fmt.Errorf("delete Contact: %w", err)
 	}
 
+	var contactTemplateIDs []uint
+	if err := tx.Model(&models.VaultContactTemplate{}).Where("vault_id = ?", vaultID).Pluck("id", &contactTemplateIDs).Error; err != nil {
+		return fmt.Errorf("pluck VaultContactTemplate ids: %w", err)
+	}
+	if len(contactTemplateIDs) > 0 {
+		var contactPageIDs []uint
+		if err := tx.Model(&models.VaultContactTemplatePage{}).Where("template_id IN ?", contactTemplateIDs).Pluck("id", &contactPageIDs).Error; err != nil {
+			return fmt.Errorf("pluck VaultContactTemplatePage ids: %w", err)
+		}
+		if len(contactPageIDs) > 0 {
+			if err := tx.Where("template_page_id IN ?", contactPageIDs).Delete(&models.VaultContactTemplateModule{}).Error; err != nil {
+				return fmt.Errorf("delete VaultContactTemplateModule: %w", err)
+			}
+		}
+		if err := tx.Where("template_id IN ?", contactTemplateIDs).Delete(&models.VaultContactTemplatePage{}).Error; err != nil {
+			return fmt.Errorf("delete VaultContactTemplatePage: %w", err)
+		}
+		if err := tx.Where("id IN ?", contactTemplateIDs).Delete(&models.VaultContactTemplate{}).Error; err != nil {
+			return fmt.Errorf("delete VaultContactTemplate: %w", err)
+		}
+	}
+
 	// Step 5: Delete the vault itself.
 	if err := tx.Where("id = ?", vaultID).Delete(&models.Vault{}).Error; err != nil {
 		return fmt.Errorf("delete Vault: %w", err)
@@ -504,55 +501,33 @@ func deleteVaultCascade(tx *gorm.DB, vaultID string) error {
 }
 
 func (s *VaultService) CheckUserVaultAccess(userID, vaultID string, requiredPerm int) error {
-	var uv models.UserVault
-	if err := s.db.Where("user_id = ? AND vault_id = ?", userID, vaultID).First(&uv).Error; err != nil {
+	_, err := s.CheckUserVaultAccessWithAccount(userID, vaultID, requiredPerm)
+	return err
+}
+
+// CheckUserVaultAccessWithAccount returns the owning account only after
+// verifying vault membership. It does not grant account-settings access.
+func (s *VaultService) CheckUserVaultAccessWithAccount(userID, vaultID string, requiredPerm int) (string, error) {
+	var membership struct {
+		Permission int
+		AccountID  string
+	}
+	if err := s.db.Table("user_vault").Select("user_vault.permission, vaults.account_id").
+		Joins("JOIN vaults ON vaults.id = user_vault.vault_id").
+		Where("user_vault.user_id = ? AND user_vault.vault_id = ?", userID, vaultID).
+		Take(&membership).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrVaultForbidden
+			return "", ErrVaultForbidden
 		}
-		return err
-	}
-	if uv.Permission > requiredPerm {
-		return ErrInsufficientPerm
-	}
-	return nil
-}
-
-// createUserSelfContact creates a shadow Contact in the vault for a user (Monica v5 pattern).
-// GORM zero-value bool trick: CanBeDeleted defaults to true, Listed defaults to true,
-// so we must Create first then Update both to false.
-func createUserSelfContact(tx *gorm.DB, userID, vaultID string) (string, error) {
-	var user models.User
-	if err := tx.First(&user, "id = ?", userID).Error; err != nil {
 		return "", err
 	}
-
-	contact := models.Contact{
-		VaultID:   vaultID,
-		FirstName: user.FirstName,
-		LastName:  user.LastName,
+	if membership.Permission > requiredPerm {
+		return "", ErrInsufficientPerm
 	}
-	if err := tx.Create(&contact).Error; err != nil {
-		return "", err
-	}
-	// GORM skips false for bool fields with default:true — must update after create
-	if err := tx.Model(&contact).Updates(map[string]interface{}{
-		"can_be_deleted": false,
-		"listed":         false,
-	}).Error; err != nil {
-		return "", err
-	}
-	return contact.ID, nil
+	return membership.AccountID, nil
 }
 
-func (s *VaultService) getUserContactID(userID, vaultID string) string {
-	var uv models.UserVault
-	if err := s.db.Where("user_id = ? AND vault_id = ?", userID, vaultID).First(&uv).Error; err != nil {
-		return ""
-	}
-	return uv.ContactID
-}
-
-func getUserNameOrder(db *gorm.DB, userID string) (string, error) {
+func GetUserNameOrder(db *gorm.DB, userID string) (string, error) {
 	var user models.User
 	if err := db.First(&user, "id = ?", userID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -563,51 +538,37 @@ func getUserNameOrder(db *gorm.DB, userID string) (string, error) {
 	return user.NameOrder, nil
 }
 
-func GetEffectiveVaultNameOrder(db *gorm.DB, vaultID, userID string) (string, error) {
-	userNameOrder, err := getUserNameOrder(db, userID)
-	if err != nil {
-		return "", err
-	}
-	var vault models.Vault
-	if err := db.First(&vault, "id = ?", vaultID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", ErrVaultNotFound
-		}
-		return "", err
-	}
-	return effectiveVaultNameOrder(&vault, userNameOrder), nil
-}
-
-func effectiveVaultNameOrder(v *models.Vault, userNameOrder string) string {
-	if v.NameOrder != nil {
-		return *v.NameOrder
-	}
-	return userNameOrder
-}
-
-func toVaultResponse(v *models.Vault, userContactID, userNameOrder string) dto.VaultResponse {
+func toVaultResponse(v *models.Vault, permission int) dto.VaultResponse {
 	desc := ""
 	if v.Description != nil {
 		desc = *v.Description
 	}
 	return dto.VaultResponse{
-		ID:                 v.ID,
-		AccountID:          v.AccountID,
-		Name:               v.Name,
-		Description:        desc,
-		NameOrder:          v.NameOrder,
-		EffectiveNameOrder: effectiveVaultNameOrder(v, userNameOrder),
-		DefaultActivityTab: v.DefaultActivityTab,
-		UserContactID:      userContactID,
+		ID:          v.ID,
+		AccountID:   v.AccountID,
+		Name:        v.Name,
+		Description: desc,
 		// Layout reads the Viewer-accessible vault detail, not Manager-only settings.
-		ShowGroupTab:     v.ShowGroupTab,
-		ShowTasksTab:     v.ShowTasksTab,
-		ShowFilesTab:     v.ShowFilesTab,
-		ShowJournalTab:   v.ShowJournalTab,
-		ShowCompaniesTab: v.ShowCompaniesTab,
-		ShowReportsTab:   v.ShowReportsTab,
-		ShowCalendarTab:  v.ShowCalendarTab,
-		CreatedAt:        v.CreatedAt,
-		UpdatedAt:        v.UpdatedAt,
+		ShowGroupTab:          v.ShowGroupTab,
+		ShowTasksTab:          v.ShowTasksTab,
+		ShowFilesTab:          v.ShowFilesTab,
+		ShowJournalTab:        v.ShowJournalTab,
+		ShowCompaniesTab:      v.ShowCompaniesTab,
+		ShowReportsTab:        v.ShowReportsTab,
+		ShowCalendarTab:       v.ShowCalendarTab,
+		CurrentUserPermission: permission,
+		CreatedAt:             v.CreatedAt,
+		UpdatedAt:             v.UpdatedAt,
 	}
+}
+
+func getUserVaultPermission(db *gorm.DB, userID, vaultID string) (int, error) {
+	var membership models.UserVault
+	if err := db.Select("permission").Where("user_id = ? AND vault_id = ?", userID, vaultID).First(&membership).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, ErrVaultForbidden
+		}
+		return 0, err
+	}
+	return membership.Permission, nil
 }

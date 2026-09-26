@@ -3,8 +3,11 @@ package models
 import "time"
 
 type Invitation struct {
-	ID         uint       `json:"id" gorm:"primaryKey;autoIncrement"`
-	AccountID  string     `json:"account_id" gorm:"type:text;not null;index"`
+	ID        uint   `json:"id" gorm:"primaryKey;autoIncrement"`
+	AccountID string `json:"account_id" gorm:"type:text;not null;index"`
+	// A nil VaultID is an account invitation. Existing invitations remain
+	// account invitations after upgrading from older versions.
+	VaultID    *string    `json:"vault_id" gorm:"type:text;index"`
 	Email      string     `json:"email" gorm:"type:text;not null"`
 	Token      string     `json:"token" gorm:"type:text;uniqueIndex;not null"`
 	Permission int        `json:"permission" gorm:"not null;default:300"`

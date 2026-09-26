@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,17 +68,25 @@ func setupReminderSchedulerTest(t *testing.T) *reminderSchedulerTestContext {
 		t.Fatalf("CreateContact failed: %v", err)
 	}
 
-	// GORM many2many creates this as a 2-column pivot; recreate with full schema.
-	db.Exec("DROP TABLE IF EXISTS contact_reminder_scheduled")
-	db.Exec(`CREATE TABLE contact_reminder_scheduled (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		user_notification_channel_id INTEGER NOT NULL,
-		contact_reminder_id INTEGER NOT NULL,
-		scheduled_at DATETIME NOT NULL,
-		triggered_at DATETIME,
-		created_at DATETIME,
-		updated_at DATETIME
-	)`)
+	if db.Dialector.Name() == "sqlite" {
+		// GORM many2many creates this as a 2-column pivot under SQLite; recreate
+		// it with the full scheduled-delivery schema. PostgreSQL AutoMigrate
+		// already creates the model's explicit table correctly.
+		if err := db.Exec("DROP TABLE IF EXISTS contact_reminder_scheduled").Error; err != nil {
+			t.Fatalf("drop malformed scheduled-reminder table: %v", err)
+		}
+		if err := db.Exec(`CREATE TABLE contact_reminder_scheduled (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_notification_channel_id INTEGER NOT NULL,
+			contact_reminder_id INTEGER NOT NULL,
+			scheduled_at DATETIME NOT NULL,
+			triggered_at DATETIME,
+			created_at DATETIME,
+			updated_at DATETIME
+		)`).Error; err != nil {
+			t.Fatalf("create scheduled-reminder table: %v", err)
+		}
+	}
 
 	mailer := &mockMailer{}
 	svc := NewReminderSchedulerService(db, mailer, &NoopSender{})
@@ -199,8 +208,14 @@ func TestProcessDueReminders_OneDueReminder(t *testing.T) {
 	if ctx.mailer.calls[0].To != "scheduler-test@example.com" {
 		t.Errorf("expected to='scheduler-test@example.com', got '%s'", ctx.mailer.calls[0].To)
 	}
-	if ctx.mailer.calls[0].Subject != "Reminder: Test Reminder" {
-		t.Errorf("expected subject='Reminder: Test Reminder', got '%s'", ctx.mailer.calls[0].Subject)
+	if ctx.mailer.calls[0].Subject != "Reminder: Test Reminder — John Doe" {
+		t.Errorf("expected subject to identify the reminder and contact, got %q", ctx.mailer.calls[0].Subject)
+	}
+	if strings.Contains(ctx.mailer.calls[0].Body, "<h2>") || strings.Count(ctx.mailer.calls[0].Body, "Test Reminder") != 1 {
+		t.Errorf("expected one reminder label and no repeated heading in body, got %q", ctx.mailer.calls[0].Body)
+	}
+	if !strings.Contains(ctx.mailer.calls[0].Body, "John Doe") {
+		t.Errorf("expected contact name in reminder body, got %q", ctx.mailer.calls[0].Body)
 	}
 
 	// Verify TriggeredAt is set
@@ -220,8 +235,8 @@ func TestProcessDueReminders_OneDueReminder(t *testing.T) {
 	if sent.Error != nil {
 		t.Errorf("expected no error on sent notification, got '%s'", *sent.Error)
 	}
-	if sent.SubjectLine != "Reminder: Test Reminder" {
-		t.Errorf("expected subject_line='Reminder: Test Reminder', got '%s'", sent.SubjectLine)
+	if sent.SubjectLine != "Reminder: Test Reminder — John Doe" {
+		t.Errorf("expected persisted subject line to identify the contact, got %q", sent.SubjectLine)
 	}
 
 	// Verify ContactReminder.NumberTimesTriggered incremented

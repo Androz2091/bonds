@@ -8,10 +8,12 @@ import {
   theme,
   Button,
   Tooltip,
+  Alert,
 } from "antd";
 import {
   SettingOutlined,
   TeamOutlined,
+  ShareAltOutlined,
   LogoutOutlined,
   UserOutlined,
   CalendarOutlined,
@@ -41,14 +43,16 @@ import type { ThemeMode } from "@/stores/theme";
 import { useTranslation } from "react-i18next";
 import SearchBar from "@/components/SearchBar";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api";
+import type { GithubComNaibaBondsInternalDtoAccountMembershipResponse as AccountMembership } from "@/api/generated/data-contracts";
 import { usePreferencesSync } from "@/hooks/usePreferencesSync";
 
 const { Header, Content } = AntLayout;
 
 export default function Layout() {
-  const { user, logout } = useAuth();
+  const { user, logout, setExternalToken } = useAuth();
+  const queryClient = useQueryClient();
   // Apply the user's saved UI language to i18next so reloading the page
   // doesn't drop you back into browser-detected English.
   usePreferencesSync();
@@ -58,7 +62,7 @@ export default function Layout() {
   const { token } = theme.useToken();
   const nameOrder = useNameOrder();
   const { t } = useTranslation();
-  const { themeMode, setThemeMode } = useTheme();
+  const { themeMode, applyThemeMode } = useTheme();
   const themeModeOrder: ThemeMode[] = ["light", "dark", "system"];
   const themeModeIcons: Record<ThemeMode, React.ReactNode> = {
     light: <SunOutlined />,
@@ -82,6 +86,17 @@ export default function Layout() {
     enabled: !!vaultId,
   });
 
+  const { data: instanceInfo } = useQuery({
+    queryKey: ["instance", "info"],
+    queryFn: async () => (await api.instance.infoList()).data,
+    staleTime: 6 * 60 * 60 * 1000,
+  });
+  const { data: accounts } = useQuery({
+    queryKey: ["auth", "accounts", user?.id],
+    queryFn: async (): Promise<AccountMembership[]> => (await api.auth.accountsList()).data ?? [],
+    enabled: !!user,
+  });
+
   // Grouped nav: Core | Content | Management | Activity
   // Groups separated by thin dividers for visual hierarchy
   const vaultNavGroups = vaultId
@@ -90,6 +105,7 @@ export default function Layout() {
         [
           { key: `/vaults/${vaultId}`, icon: <DashboardOutlined />, label: t("nav.dashboard") },
           { key: `/vaults/${vaultId}/contacts`, icon: <TeamOutlined />, label: t("nav.contacts") },
+          { key: `/vaults/${vaultId}/graph`, icon: <ShareAltOutlined />, label: t("nav.graph") },
         ],
         // Content
         [
@@ -106,8 +122,8 @@ export default function Layout() {
         // Activity
         [
           { key: `/vaults/${vaultId}/reminders`, icon: <BellOutlined />, label: t("nav.reminders") },
-          { key: `/vaults/${vaultId}/dav-subscriptions`, icon: <CloudServerOutlined />, label: t("nav.davSubscriptions") },
-          { key: `/vaults/${vaultId}/settings`, icon: <SettingOutlined />, label: t("nav.settings") },
+          { key: `/vaults/${vaultId}/dav-subscriptions`, icon: <CloudServerOutlined />, label: t("nav.davSubscriptions"), visible: currentVault?.current_user_permission === 100 },
+          { key: `/vaults/${vaultId}/settings`, icon: <SettingOutlined />, label: t("nav.settings"), visible: currentVault?.current_user_permission === 100 },
         ],
       ]
         // The duplicated static lists ignored vault visibility; only explicit false hides an entry during loading.
@@ -123,10 +139,21 @@ export default function Layout() {
     .find((item) => location.pathname.startsWith(item.key))?.key ?? "";
 
   const userMenuItems: MenuProps["items"] = [
+    ...(accounts && accounts.length > 1
+      ? [
+          { type: "group" as const, label: t("nav.accounts"), children: accounts.filter((membership) => !!membership.account_id).map((membership) => ({
+            key: `account:${membership.account_id}`,
+            label: `${t("nav.account")} · ${membership.account_id?.slice(0, 8)}${membership.account_id === user?.account_id ? " ✓" : ""}`,
+          })) },
+          { type: "divider" as const },
+        ]
+      : []),
     { key: "/settings", icon: <SettingOutlined />, label: t("nav.account") },
     { key: "/settings/preferences", icon: <ControlOutlined />, label: t("nav.preferences") },
     { key: "/settings/notifications", icon: <BellOutlined />, label: t("nav.notifications") },
-    { key: "/settings/personalize", icon: <EditOutlined />, label: t("nav.personalize") },
+    ...(user?.is_admin
+      ? [{ key: "/settings/personalize", icon: <EditOutlined />, label: t("nav.personalize") }]
+      : []),
     { key: "/settings/users", icon: <UserSwitchOutlined />, label: t("nav.users") },
     { key: "/settings/2fa", icon: <LockOutlined />, label: t("nav.twoFactor") },
     { key: "/settings/invitations", icon: <MailOutlined />, label: t("nav.invitations") },
@@ -146,7 +173,16 @@ export default function Layout() {
 
   const nextThemeMode = () => {
     const idx = themeModeOrder.indexOf(themeMode);
-    setThemeMode(themeModeOrder[(idx + 1) % themeModeOrder.length]);
+    const next = themeModeOrder[(idx + 1) % themeModeOrder.length];
+    applyThemeMode(next);
+    api.preferences
+      .preferencesUpdate({ theme: next })
+      .then(() =>
+        queryClient.invalidateQueries({ queryKey: ["settings", "preferences"] }),
+      )
+      .catch(() =>
+        queryClient.invalidateQueries({ queryKey: ["settings", "preferences"] }),
+      );
   };
 
   const initials = user ? formatContactInitials(nameOrder, user) : "";
@@ -212,10 +248,22 @@ export default function Layout() {
             <Dropdown
               menu={{
                 items: userMenuItems,
-                onClick: ({ key }) => {
+                onClick: async ({ key }) => {
                   if (key === "logout") {
                     logout();
                     navigate("/login");
+                  } else if (key.startsWith("account:")) {
+                    const accountID = key.slice("account:".length);
+                    if (accountID === user?.account_id) return;
+                    try {
+                      const response = await api.auth.switchAccountCreate({ account_id: accountID });
+                      if (response.data?.token) {
+                        setExternalToken(response.data.token);
+                        navigate("/vaults");
+                      }
+                    } catch {
+                      navigate("/vaults");
+                    }
                   } else {
                     navigate(key);
                   }
@@ -285,12 +333,44 @@ export default function Layout() {
         )}
       </div>
 
+      {instanceInfo?.update_available && instanceInfo.latest_version_url && (
+        <Alert
+          type="info"
+          showIcon
+          banner
+          closable
+          message={
+            <span>
+              {t("version_update.available", {
+                version: instanceInfo.latest_version,
+              })}{" "}
+              <a
+                href={instanceInfo.latest_version_url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {t("version_update.view_release")}
+              </a>
+            </span>
+          }
+        />
+      )}
+
       <Content
         style={{
           padding: "24px 16px",
           background: token.colorBgLayout,
           minHeight: 280,
-          overflow: "auto",
+          // Deliberately not `overflow: auto`. Any scrollable ancestor becomes
+          // the containing block for position:sticky inside it, so an overflow
+          // here silently stops the contact-section nav (and anything else
+          // sticky) from sticking to the viewport. Wide content scrolls in its
+          // own container instead — and `clip` (which, unlike auto/hidden,
+          // creates no scroll container and leaves sticky alone) guarantees
+          // that anything without its own container can only be cut at the
+          // edge, never widen the document and pan the header off-screen.
+          overflowX: "clip",
+          minWidth: 0,
         }}
       >
         <div style={{ maxWidth: 1600, margin: "0 auto" }}>

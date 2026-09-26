@@ -23,17 +23,6 @@ type mcpResponse struct {
 	} `json:"error"`
 }
 
-func (ts *testServer) doMCPRequest(body, token string) *mcpResponseRecorder {
-	rec := ts.doRequest(http.MethodPost, "/mcp", body, token)
-	return &mcpResponseRecorder{ResponseRecorder: rec}
-}
-
-type mcpResponseRecorder struct {
-	ResponseRecorder interface {
-		Result() *http.Response
-	}
-}
-
 type mcpBearerTransport struct {
 	token string
 	base  http.RoundTripper
@@ -289,8 +278,12 @@ func TestMCPExecuteActionUsesExistingPermissions(t *testing.T) {
 	ts := setupTestServer(t)
 	managerToken, managerAuth := ts.registerTestUser(t, "mcp-manager@example.com")
 	vault := ts.createTestVault(t, managerToken, "MCP Vault")
+	var birthdateType models.ContactImportantDateType
+	if err := ts.db.Where("vault_id = ? AND internal_type = ?", vault.ID, "birthdate").First(&birthdateType).Error; err != nil {
+		t.Fatalf("find birthdate type: %v", err)
+	}
 
-	body := mcpToolCall(1, "execute_action", fmt.Sprintf(`{"action_id":"post_vaults_by_vault_id_contacts","path_params":{"vault_id":%q},"body":{"first_name":"Alice","last_name":"Agent"}}`, vault.ID))
+	body := mcpToolCall(1, "execute_action", fmt.Sprintf(`{"action_id":"post_vaults_by_vault_id_contacts","path_params":{"vault_id":%q},"body":{"first_name":"Alice","last_name":"Agent","important_dates":[{"label":"Birthdate","date_precision":"full","year":1990,"month":6,"day":15,"contact_important_date_type_id":%d}]}}`, vault.ID, birthdateType.ID))
 	rec := ts.doRequest(http.MethodPost, "/mcp", body, managerToken)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
@@ -304,6 +297,19 @@ func TestMCPExecuteActionUsesExistingPermissions(t *testing.T) {
 	}
 	if toolResult.IsError {
 		t.Fatalf("manager execute_action unexpectedly failed: %s", rec.Body.String())
+	}
+	var createdContact models.Contact
+	if err := ts.db.Where("vault_id = ? AND first_name = ?", vault.ID, "Alice").First(&createdContact).Error; err != nil {
+		t.Fatalf("load contact created through MCP: %v", err)
+	}
+	var birthdateCount int64
+	if err := ts.db.Model(&models.ContactImportantDate{}).
+		Where("contact_id = ? AND contact_important_date_type_id = ?", createdContact.ID, birthdateType.ID).
+		Count(&birthdateCount).Error; err != nil {
+		t.Fatalf("count MCP-created birthdates: %v", err)
+	}
+	if birthdateCount != 1 {
+		t.Fatalf("expected MCP to create one birthdate, got %d", birthdateCount)
 	}
 
 	viewer := createSecondUser(t, ts, managerAuth.User.AccountID, "mcp-viewer@example.com", false)
@@ -425,20 +431,16 @@ func TestMCPAcceptsPersonalAccessToken(t *testing.T) {
 	}
 }
 
-func TestMCPFetchResourceRejectsShadowContact(t *testing.T) {
+func TestMCPFetchResourceRejectsUnlistedContact(t *testing.T) {
 	ts := setupTestServer(t)
-	token, auth := ts.registerTestUser(t, "mcp-shadow@example.com")
-	vault := ts.createTestVault(t, token, "Shadow Vault")
-
-	var userVault models.UserVault
-	if err := ts.db.Where("user_id = ? AND vault_id = ?", auth.User.ID, vault.ID).First(&userVault).Error; err != nil {
-		t.Fatalf("failed to load user_vault: %v", err)
-	}
-	if userVault.ContactID == "" {
-		t.Fatal("expected user_vault shadow contact id")
+	token, _ := ts.registerTestUser(t, "mcp-unlisted@example.com")
+	vault := ts.createTestVault(t, token, "Unlisted Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "Unlisted")
+	if err := ts.db.Model(&models.Contact{}).Where("id = ?", contact.ID).Update("listed", false).Error; err != nil {
+		t.Fatalf("archive contact: %v", err)
 	}
 
-	fetchBody := mcpToolCall(1, "fetch_resource", fmt.Sprintf(`{"uri":"bonds://contact/%s"}`, userVault.ContactID))
+	fetchBody := mcpToolCall(1, "fetch_resource", fmt.Sprintf(`{"uri":"bonds://contact/%s"}`, contact.ID))
 	rec := ts.doRequest(http.MethodPost, "/mcp", fetchBody, token)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected MCP 200 with tool error, got %d: %s", rec.Code, rec.Body.String())
@@ -448,34 +450,30 @@ func TestMCPFetchResourceRejectsShadowContact(t *testing.T) {
 		IsError bool `json:"isError"`
 	}
 	if err := json.Unmarshal(resp.Result, &toolResult); err != nil {
-		t.Fatalf("failed to parse shadow fetch result: %v", err)
+		t.Fatalf("failed to parse unlisted fetch result: %v", err)
 	}
 	if !toolResult.IsError {
-		t.Fatalf("shadow contact fetch should fail: %s", rec.Body.String())
+		t.Fatalf("unlisted contact fetch should fail: %s", rec.Body.String())
 	}
 }
 
-func TestMCPFetchResourceRejectsTaskOnlyAssignedToShadowContact(t *testing.T) {
+func TestMCPFetchResourceRejectsTaskOnlyAssignedToUnlistedContact(t *testing.T) {
 	ts := setupTestServer(t)
-	token, auth := ts.registerTestUser(t, "mcp-shadow-task@example.com")
-	vault := ts.createTestVault(t, token, "Shadow Task Vault")
-
-	var userVault models.UserVault
-	if err := ts.db.Where("user_id = ? AND vault_id = ?", auth.User.ID, vault.ID).First(&userVault).Error; err != nil {
-		t.Fatalf("failed to load user_vault: %v", err)
+	token, _ := ts.registerTestUser(t, "mcp-unlisted-task@example.com")
+	vault := ts.createTestVault(t, token, "Unlisted Task Vault")
+	contact := ts.createTestContact(t, token, vault.ID, "Unlisted")
+	if err := ts.db.Model(&models.Contact{}).Where("id = ?", contact.ID).Update("listed", false).Error; err != nil {
+		t.Fatalf("archive contact: %v", err)
 	}
-	if userVault.ContactID == "" {
-		t.Fatal("expected user_vault shadow contact id")
+	hiddenTask := models.ContactTask{VaultID: vault.ID, Label: "Unlisted-only task", AuthorName: "tester"}
+	if err := ts.db.Create(&hiddenTask).Error; err != nil {
+		t.Fatalf("failed to create hidden task: %v", err)
 	}
-	shadowTask := models.ContactTask{VaultID: vault.ID, Label: "Shadow-only task", AuthorName: "tester"}
-	if err := ts.db.Create(&shadowTask).Error; err != nil {
-		t.Fatalf("failed to create shadow task: %v", err)
-	}
-	if err := ts.db.Create(&models.TaskContact{ContactTaskID: shadowTask.ID, ContactID: userVault.ContactID}).Error; err != nil {
-		t.Fatalf("failed to assign shadow task: %v", err)
+	if err := ts.db.Create(&models.TaskContact{ContactTaskID: hiddenTask.ID, ContactID: contact.ID}).Error; err != nil {
+		t.Fatalf("failed to assign hidden task: %v", err)
 	}
 
-	fetchBody := mcpToolCall(1, "fetch_resource", fmt.Sprintf(`{"uri":"bonds://task/%d"}`, shadowTask.ID))
+	fetchBody := mcpToolCall(1, "fetch_resource", fmt.Sprintf(`{"uri":"bonds://task/%d"}`, hiddenTask.ID))
 	rec := ts.doRequest(http.MethodPost, "/mcp", fetchBody, token)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected MCP 200 with tool error, got %d: %s", rec.Code, rec.Body.String())
@@ -485,9 +483,9 @@ func TestMCPFetchResourceRejectsTaskOnlyAssignedToShadowContact(t *testing.T) {
 		IsError bool `json:"isError"`
 	}
 	if err := json.Unmarshal(resp.Result, &toolResult); err != nil {
-		t.Fatalf("failed to parse shadow task fetch result: %v", err)
+		t.Fatalf("failed to parse hidden task fetch result: %v", err)
 	}
 	if !toolResult.IsError {
-		t.Fatalf("shadow-only task fetch should fail: %s", rec.Body.String())
+		t.Fatalf("unlisted-only task fetch should fail: %s", rec.Body.String())
 	}
 }

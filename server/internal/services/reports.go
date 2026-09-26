@@ -109,9 +109,8 @@ func (s *ReportService) ImportantDatesReport(vaultID, userID string) ([]dto.Impo
 	return result, nil
 }
 
-func (s *ReportService) Overview(vaultID string) (*dto.ReportOverviewResponse, error) {
+func (s *ReportService) Overview(vaultID, userID string) (*dto.ReportOverviewResponse, error) {
 	var totalContacts int64
-	// Exclude shadow contacts (Listed=false) created for UserVault self-contact
 	if err := s.db.Model(&models.Contact{}).Where("vault_id = ? AND listed = ?", vaultID, true).Count(&totalContacts).Error; err != nil {
 		return nil, err
 	}
@@ -134,14 +133,8 @@ func (s *ReportService) Overview(vaultID string) (*dto.ReportOverviewResponse, e
 	}
 
 	var totalMood int64
-	var paramIDs []uint
-	if err := s.db.Model(&models.MoodTrackingParameter{}).Where("vault_id = ?", vaultID).Pluck("id", &paramIDs).Error; err != nil {
+	if err := s.db.Model(&models.MoodTrackingEvent{}).Where("vault_id = ? AND user_id = ?", vaultID, userID).Count(&totalMood).Error; err != nil {
 		return nil, err
-	}
-	if len(paramIDs) > 0 {
-		if err := s.db.Model(&models.MoodTrackingEvent{}).Where("mood_tracking_parameter_id IN ?", paramIDs).Count(&totalMood).Error; err != nil {
-			return nil, err
-		}
 	}
 
 	return &dto.ReportOverviewResponse{
@@ -152,7 +145,7 @@ func (s *ReportService) Overview(vaultID string) (*dto.ReportOverviewResponse, e
 	}, nil
 }
 
-func (s *ReportService) MoodReport(vaultID string) ([]dto.MoodReportItem, error) {
+func (s *ReportService) MoodReport(vaultID, userID string) ([]dto.MoodReportItem, error) {
 	var params []models.MoodTrackingParameter
 	if err := s.db.Where("vault_id = ?", vaultID).Find(&params).Error; err != nil {
 		return nil, err
@@ -161,7 +154,9 @@ func (s *ReportService) MoodReport(vaultID string) ([]dto.MoodReportItem, error)
 	result := make([]dto.MoodReportItem, 0, len(params))
 	for _, p := range params {
 		var count int64
-		s.db.Model(&models.MoodTrackingEvent{}).Where("mood_tracking_parameter_id = ?", p.ID).Count(&count)
+		if err := s.db.Model(&models.MoodTrackingEvent{}).Where("vault_id = ? AND user_id = ? AND mood_tracking_parameter_id = ?", vaultID, userID, p.ID).Count(&count).Error; err != nil {
+			return nil, err
+		}
 		result = append(result, dto.MoodReportItem{
 			ParameterLabel: ptrToStr(p.Label),
 			HexColor:       p.HexColor,

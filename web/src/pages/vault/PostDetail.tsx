@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Card,
@@ -17,6 +17,7 @@ import {
   Row,
   Col,
   Select,
+  Checkbox,
 } from "antd";
 import {
   ArrowLeftOutlined,
@@ -39,13 +40,31 @@ import type {
   PostMetric,
   JournalMetric,
   SliceOfLifeResponse,
+  GithubComNaibaBondsInternalDtoPostContactResponse,
+  GithubComNaibaBondsInternalDtoUpdatePostRequest,
 } from "@/api";
 import { useTranslation } from "react-i18next";
 import { useDateFormat, formatDate } from "@/utils/dateFormat";
-import LinkifiedText from "@/components/LinkifiedText";
+import MarkdownEditor from "@/components/markdown/MarkdownEditor";
+import MarkdownContent from "@/components/markdown/MarkdownContent";
+import PostContactTags from "@/components/journal/PostContactTags";
+import {
+  appendMissingContactMentions,
+  contactIdsFromMentions,
+} from "@/components/journal/contactMentionSerialization";
+import { formatContactName, useNameOrder } from "@/utils/nameFormat";
+import {
+  plainTextToMarkdown,
+  plainTextToSafeHTML,
+} from "@/components/markdown/markdownFormat";
 
-const { Title, Text, Paragraph } = Typography;
+const { Title, Text } = Typography;
 const { Dragger } = Upload;
+
+type UpdatePostVariables = {
+  readonly revision: number;
+  readonly payload: Readonly<GithubComNaibaBondsInternalDtoUpdatePostRequest>;
+};
 
 export default function PostDetail() {
   const { id, journalId, postId } = useParams<{
@@ -62,12 +81,15 @@ export default function PostDetail() {
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const dateFormats = useDateFormat();
+  const nameOrder = useNameOrder();
+  const editRevisionRef = useRef(0);
 
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");
   const [sections, setSections] = useState<{ label: string; body: string }[]>(
     [],
   );
+  const [updateLastContacted, setUpdateLastContacted] = useState(false);
   const [newTagName, setNewTagName] = useState("");
   const [isAddingTag, setIsAddingTag] = useState(false);
   const [editingTagId, setEditingTagId] = useState<number | null>(null);
@@ -89,11 +111,7 @@ export default function PostDetail() {
   const { data: tags } = useQuery({
     queryKey: ["vaults", vaultId, "journals", jId, "posts", pId, "tags"],
     queryFn: async () => {
-      const res = await api.postTags.journalsPostsTagsList(
-        vaultId,
-        jId,
-        pId,
-      );
+      const res = await api.postTags.journalsPostsTagsList(vaultId, jId, pId);
       return res.data ?? [];
     },
     enabled: !!vaultId && !!jId && !!pId,
@@ -158,8 +176,7 @@ export default function PostDetail() {
   });
 
   const removeSliceMutation = useMutation({
-    mutationFn: () =>
-      api.posts.journalsPostsSlicesDelete(vaultId, jId, pId),
+    mutationFn: () => api.posts.journalsPostsSlicesDelete(vaultId, jId, pId),
     onSuccess: () => {
       queryClient.invalidateQueries({
         queryKey: ["vaults", vaultId, "journals", jId, "posts", pId],
@@ -184,17 +201,16 @@ export default function PostDetail() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: () =>
-      api.posts.journalsPostsUpdate(String(vaultId), jId, pId, {
-        title,
-        written_at: post!.written_at,
-        sections: sections.map((s, i) => ({ ...s, position: i })),
-      }),
-    onSuccess: () => {
+    mutationFn: ({ payload }: UpdatePostVariables) =>
+      api.posts.journalsPostsUpdate(String(vaultId), jId, pId, payload),
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({
         queryKey: ["vaults", vaultId, "journals", jId, "posts", pId],
       });
-      setEditing(false);
+      // A stale completion must not close a draft that advanced past its saved revision.
+      if (variables.revision === editRevisionRef.current) {
+        setEditing(false);
+      }
       message.success(t("vault.post_detail.post_updated"));
     },
     onError: (e: APIError) => message.error(e.message),
@@ -278,17 +294,36 @@ export default function PostDetail() {
 
   function startEdit() {
     if (!post) return;
+    editRevisionRef.current += 1;
     setTitle(post.title);
+    const associatedContacts = (post.contacts ?? []).flatMap(
+      (contact: GithubComNaibaBondsInternalDtoPostContactResponse) =>
+        contact.id
+          ? [{ id: contact.id, name: formatContactName(nameOrder, contact) }]
+          : [],
+    );
     setSections(
-      (post.sections ?? []).map((s: PostSection) => ({
+      (post.sections ?? []).map((s: PostSection, index: number) => ({
         label: s.label,
-        body: s.content,
+        body:
+          index === 0
+            ? appendMissingContactMentions(
+                s.content_format === "markdown"
+                  ? (s.content ?? "")
+                  : plainTextToMarkdown(s.content ?? ""),
+                associatedContacts,
+              )
+            : s.content_format === "markdown"
+              ? (s.content ?? "")
+              : plainTextToMarkdown(s.content ?? ""),
       })),
     );
+    setUpdateLastContacted(false);
     setEditing(true);
   }
 
   function addSection() {
+    editRevisionRef.current += 1;
     setSections([...sections, { label: "", body: "" }]);
   }
 
@@ -297,13 +332,43 @@ export default function PostDetail() {
     field: "label" | "body",
     value: string,
   ) {
+    editRevisionRef.current += 1;
     setSections((prev) =>
       prev.map((s, i) => (i === index ? { ...s, [field]: value } : s)),
     );
   }
 
   function removeSection(index: number) {
+    editRevisionRef.current += 1;
     setSections((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function cancelEdit() {
+    editRevisionRef.current += 1;
+    setEditing(false);
+  }
+
+  function saveEdit() {
+    if (!post) return;
+    updateMutation.mutate({
+      revision: editRevisionRef.current,
+      payload: {
+        title,
+        written_at: post.written_at,
+        sections: sections.map((section, position) => ({
+          label: section.label,
+          content: section.body,
+          content_format: "markdown",
+          position,
+        })),
+        contact_ids: Array.from(
+          new Set(
+            sections.flatMap((section) => contactIdsFromMentions(section.body)),
+          ),
+        ),
+        update_last_contacted: updateLastContacted,
+      },
+    });
   }
 
   if (isLoading) {
@@ -323,10 +388,16 @@ export default function PostDetail() {
   };
 
   const handleMetricChange = (metricId: number, value: number | null) => {
-    if (value === null) return;
     const existingMetric = postMetrics?.find(
       (pm: PostMetric) => pm.journal_metric_id === metricId,
     );
+
+    if (value === null) {
+      if (existingMetric?.id != null) {
+        removeMetricMutation.mutate(existingMetric.id);
+      }
+      return;
+    }
 
     if (existingMetric) {
       removeMetricMutation.mutate(existingMetric.id!, {
@@ -373,7 +444,10 @@ export default function PostDetail() {
               <Space direction="vertical" style={{ width: "100%" }} size={16}>
                 <Input
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  onChange={(e) => {
+                    editRevisionRef.current += 1;
+                    setTitle(e.target.value);
+                  }}
                   placeholder={t("vault.post_detail.post_title_placeholder")}
                   style={{
                     fontSize: 20,
@@ -413,19 +487,31 @@ export default function PostDetail() {
                       />
                     }
                   >
-                    <Input.TextArea
+                    <MarkdownEditor
+                      vaultId={vaultId}
                       value={section.body}
-                      onChange={(e) =>
-                        updateSection(index, "body", e.target.value)
+                      onChange={(value) => updateSection(index, "body", value)}
+                      ariaLabel={
+                        section.label ||
+                        t("vault.post_detail.section_content_placeholder")
                       }
-                      rows={4}
                       placeholder={t(
                         "vault.post_detail.section_content_placeholder",
                       )}
-                      style={{ lineHeight: 1.8 }}
+                      variant="full"
                     />
                   </Card>
                 ))}
+
+                <Checkbox
+                  checked={updateLastContacted}
+                  onChange={(event) => {
+                    editRevisionRef.current += 1;
+                    setUpdateLastContacted(event.target.checked);
+                  }}
+                >
+                  {t("vault.journal_mentions.update_last_contacted")}
+                </Checkbox>
 
                 <Button
                   type="dashed"
@@ -439,14 +525,12 @@ export default function PostDetail() {
                 <Space>
                   <Button
                     type="primary"
-                    onClick={() => updateMutation.mutate()}
+                    onClick={saveEdit}
                     loading={updateMutation.isPending}
                   >
                     {t("common.save")}
                   </Button>
-                  <Button onClick={() => setEditing(false)}>
-                    {t("common.cancel")}
-                  </Button>
+                  <Button onClick={cancelEdit}>{t("common.cancel")}</Button>
                 </Space>
               </Space>
             </Card>
@@ -484,7 +568,10 @@ export default function PostDetail() {
                             onChange={(e) => setEditingTagName(e.target.value)}
                             onPressEnter={() => {
                               if (editingTagName.trim()) {
-                                updateTagMutation.mutate({ tagId: tag.id!, name: editingTagName.trim() });
+                                updateTagMutation.mutate({
+                                  tagId: tag.id!,
+                                  name: editingTagName.trim(),
+                                });
                               }
                             }}
                             autoFocus
@@ -495,7 +582,10 @@ export default function PostDetail() {
                             icon={<CheckOutlined />}
                             onClick={() => {
                               if (editingTagName.trim()) {
-                                updateTagMutation.mutate({ tagId: tag.id!, name: editingTagName.trim() });
+                                updateTagMutation.mutate({
+                                  tagId: tag.id!,
+                                  name: editingTagName.trim(),
+                                });
                               }
                             }}
                           />
@@ -503,7 +593,10 @@ export default function PostDetail() {
                             size="small"
                             type="text"
                             icon={<CloseOutlined />}
-                            onClick={() => { setEditingTagId(null); setEditingTagName(""); }}
+                            onClick={() => {
+                              setEditingTagId(null);
+                              setEditingTagName("");
+                            }}
                           />
                         </Space.Compact>
                       ) : (
@@ -513,7 +606,10 @@ export default function PostDetail() {
                           onClose={() => removeTagMutation.mutate(tag.id!)}
                           color="blue"
                           style={{ cursor: "pointer" }}
-                          onClick={() => { setEditingTagId(tag.id!); setEditingTagName(tag.name ?? ""); }}
+                          onClick={() => {
+                            setEditingTagId(tag.id!);
+                            setEditingTagName(tag.name ?? "");
+                          }}
                           title={t("vault.post_detail.edit_tag")}
                         >
                           {tag.name}
@@ -547,6 +643,13 @@ export default function PostDetail() {
                   </Space>
                 </div>
 
+                <div style={{ marginBottom: 16 }}>
+                  <PostContactTags
+                    vaultId={vaultId}
+                    contacts={post.contacts ?? []}
+                  />
+                </div>
+
                 {post.sections?.length ? (
                   post.sections
                     .sort(
@@ -571,16 +674,14 @@ export default function PostDetail() {
                         >
                           {section.label}
                         </Title>
-                        <Paragraph
-                          style={{
-                            fontSize: 15,
-                            lineHeight: 1.8,
-                            color: token.colorText,
-                            whiteSpace: "pre-wrap",
-                          }}
-                        >
-                          <LinkifiedText>{section.content}</LinkifiedText>
-                        </Paragraph>
+                        <MarkdownContent
+                          vaultId={vaultId}
+                          contacts={post.contacts ?? []}
+                          html={
+                            section.rendered_content ??
+                            plainTextToSafeHTML(section.content ?? "")
+                          }
+                        />
                       </div>
                     ))
                 ) : (
@@ -639,7 +740,9 @@ export default function PostDetail() {
                               size="small"
                               shape="circle"
                               icon={<DeleteOutlined />}
-                              onClick={() => deletePhotoMutation.mutate(photo.id!)}
+                              onClick={() =>
+                                deletePhotoMutation.mutate(photo.id!)
+                              }
                             />
                           </div>
                         </div>
@@ -692,9 +795,12 @@ export default function PostDetail() {
                 style={{ width: "100%" }}
                 placeholder={t("vault.post_detail.select_slice")}
                 allowClear
-                loading={assignSliceMutation.isPending || removeSliceMutation.isPending}
+                value={post.slice_of_life_id}
+                loading={
+                  assignSliceMutation.isPending || removeSliceMutation.isPending
+                }
                 onChange={(value) => {
-                  if (value) {
+                  if (value != null) {
                     assignSliceMutation.mutate(value);
                   } else {
                     removeSliceMutation.mutate();
@@ -706,7 +812,10 @@ export default function PostDetail() {
                 }))}
               />
               {slices?.length === 0 && (
-                <Text type="secondary" style={{ display: "block", marginTop: 8, fontSize: 12 }}>
+                <Text
+                  type="secondary"
+                  style={{ display: "block", marginTop: 8, fontSize: 12 }}
+                >
                   {t("vault.post_detail.no_slice")}
                 </Text>
               )}
@@ -719,6 +828,12 @@ export default function PostDetail() {
                 borderRadius: token.borderRadiusLG,
               }}
             >
+              <Text
+                type="secondary"
+                style={{ display: "block", marginBottom: 12, fontSize: 12 }}
+              >
+                {t("vault.post_detail.metric_help")}
+              </Text>
               {journalMetrics && journalMetrics.length > 0 ? (
                 <Space direction="vertical" style={{ width: "100%" }}>
                   {journalMetrics.map((jm: JournalMetric) => {

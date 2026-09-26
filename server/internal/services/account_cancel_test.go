@@ -53,3 +53,29 @@ func TestAccountCancelWrongPassword(t *testing.T) {
 		t.Errorf("Expected ErrPasswordMismatch, got %v", err)
 	}
 }
+
+func TestAccountCancelKeepsIdentityAndOtherAccount(t *testing.T) {
+	svc, userID, oldAccountID, _ := setupAccountCancelTest(t)
+	other := models.Account{}
+	if err := svc.db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.db.Create(&models.AccountMembership{AccountID: other.ID, UserID: userID, IsAdmin: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Cancel(userID, oldAccountID, "password123"); err != nil {
+		t.Fatal(err)
+	}
+	var user models.User
+	if err := svc.db.First(&user, "id = ?", userID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if user.AccountID != other.ID || !user.IsAccountAdministrator {
+		t.Fatalf("identity not rehomed: %+v", user)
+	}
+	var memberships int64
+	svc.db.Model(&models.AccountMembership{}).Where("user_id = ?", userID).Count(&memberships)
+	if memberships != 1 {
+		t.Fatalf("expected surviving membership: %d", memberships)
+	}
+}

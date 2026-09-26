@@ -239,7 +239,7 @@ func TestDeleteInvitation(t *testing.T) {
 	}
 }
 
-func TestAcceptInvitation_VaultAccessGranted(t *testing.T) {
+func TestAcceptInvitation_DoesNotGrantUnselectedVaultAccess(t *testing.T) {
 	db := testutil.SetupTestDB(t)
 	cfg := testutil.TestJWTConfig()
 	authSvc := NewAuthService(db, cfg)
@@ -299,39 +299,20 @@ func TestAcceptInvitation_VaultAccessGranted(t *testing.T) {
 	if err := db.Where("user_id = ?", newUser.ID).Find(&userVaults).Error; err != nil {
 		t.Fatalf("UserVault query failed: %v", err)
 	}
-	if len(userVaults) != 2 {
-		t.Fatalf("Expected 2 UserVault entries, got %d", len(userVaults))
+	if len(userVaults) != 0 {
+		t.Fatalf("account invitation must not grant vault access, got %d memberships", len(userVaults))
 	}
 
-	vaultIDSet := map[string]bool{v1.ID: false, v2.ID: false}
-	for _, uv := range userVaults {
-		if _, ok := vaultIDSet[uv.VaultID]; !ok {
-			t.Errorf("Unexpected vault ID: %s", uv.VaultID)
-		}
-		vaultIDSet[uv.VaultID] = true
-
-		if uv.Permission != models.PermissionEditor {
-			t.Errorf("Expected PermissionEditor (%d), got %d", models.PermissionEditor, uv.Permission)
-		}
-		if uv.ContactID == "" {
-			t.Errorf("Expected ContactID to be set for vault %s", uv.VaultID)
-		}
-
-		var contact models.Contact
-		if err := db.First(&contact, "id = ?", uv.ContactID).Error; err != nil {
-			t.Fatalf("Self-contact not found for vault %s: %v", uv.VaultID, err)
-		}
-		if contact.CanBeDeleted {
-			t.Error("Self-contact should have CanBeDeleted=false")
-		}
-		if contact.Listed {
-			t.Error("Self-contact should have Listed=false")
-		}
+	var contactCount int64
+	if err := db.Model(&models.Contact{}).Where("vault_id IN ?", []string{v1.ID, v2.ID}).Count(&contactCount).Error; err != nil {
+		t.Fatalf("Count contacts failed: %v", err)
 	}
-	for vid, found := range vaultIDSet {
-		if !found {
-			t.Errorf("User was not added to vault %s", vid)
-		}
+	if contactCount != 0 {
+		t.Fatalf("accepting invitation created %d contact(s), want 0", contactCount)
+	}
+	var membership models.AccountMembership
+	if err := db.Where("account_id = ? AND user_id = ?", resp.User.AccountID, newUser.ID).First(&membership).Error; err != nil {
+		t.Fatalf("account invitation did not grant account membership: %v", err)
 	}
 }
 
@@ -344,5 +325,72 @@ func TestCreateInvitationDuplicateEmail(t *testing.T) {
 	})
 	if err != ErrUserAlreadyExists {
 		t.Fatalf("Expected ErrUserAlreadyExists, got: %v", err)
+	}
+}
+
+func TestExistingUserAcceptsAccountAndVaultWithoutNewCredentials(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	auth := NewAuthService(db, testutil.TestJWTConfig())
+	vaultSvc := NewVaultService(db)
+	owner, err := auth.Register(dto.RegisterRequest{FirstName: "Owner", Email: "owner@example.test", Password: "password123"}, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, err := auth.Register(dto.RegisterRequest{FirstName: "Guest", Email: "guest@example.test", Password: "guestpass123"}, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault, err := vaultSvc.CreateVault(owner.User.AccountID, owner.User.ID, dto.CreateVaultRequest{Name: "Private"}, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewInvitationService(db, &NoopMailer{}, "http://localhost:8080")
+	accountInvite, err := svc.Create(owner.User.AccountID, owner.User.ID, dto.CreateInvitationRequest{Email: guest.User.Email})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var accountRecord models.Invitation
+	if err := db.First(&accountRecord, accountInvite.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Accept(dto.AcceptInvitationRequest{Token: accountRecord.Token, FirstName: "Wrong", Password: "password123"}, "en"); err != ErrExistingUserLoginRequired {
+		t.Fatalf("expected existing identity to require login, got %v", err)
+	}
+	if _, err := svc.AcceptExisting(accountRecord.Token, owner.User.ID); err != ErrInvitationIdentityMismatch {
+		t.Fatalf("other identity may not accept invite: %v", err)
+	}
+	if _, err := svc.AcceptExisting(accountRecord.Token, guest.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	var memberships []models.AccountMembership
+	if err := db.Where("user_id = ?", guest.User.ID).Find(&memberships).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(memberships) != 2 {
+		t.Fatalf("expected existing and invited account, got %d", len(memberships))
+	}
+	if err := vaultSvc.CheckUserVaultAccess(guest.User.ID, vault.ID, models.PermissionViewer); err == nil {
+		t.Fatal("account membership must not grant access to private vault")
+	}
+	vaultInvite, err := svc.CreateVault(vault.ID, owner.User.ID, dto.CreateVaultInvitationRequest{Email: guest.User.Email, Permission: models.PermissionViewer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vaultRecord models.Invitation
+	if err := db.First(&vaultRecord, vaultInvite.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AcceptExisting(vaultRecord.Token, guest.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := vaultSvc.CheckUserVaultAccess(guest.User.ID, vault.ID, models.PermissionViewer); err != nil {
+		t.Fatalf("vault invite should grant scoped access: %v", err)
+	}
+	if _, err := auth.Login(dto.LoginRequest{Email: guest.User.Email, Password: "guestpass123"}); err != nil {
+		t.Fatalf("the existing password must remain valid: %v", err)
+	}
+	var users int64
+	if err := db.Model(&models.User{}).Where("email = ?", guest.User.Email).Count(&users).Error; err != nil || users != 1 {
+		t.Fatalf("identity was duplicated: %d, %v", users, err)
 	}
 }
