@@ -491,10 +491,17 @@ function ContactSectionLayout({
       },
       { rootMargin: "400px 0px", threshold: 0.01 },
     );
+    const visibleSections = new Map<Element, IntersectionObserverEntry>();
     const activeObserver = new IntersectionObserverConstructor(
       (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            visibleSections.set(entry.target, entry);
+          } else {
+            visibleSections.delete(entry.target);
+          }
+        }
+        const visible = Array.from(visibleSections.values())
           .sort(
             (left, right) =>
               Math.abs(left.boundingClientRect.top - 132) -

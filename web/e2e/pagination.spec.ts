@@ -443,16 +443,15 @@ test.describe("Notes Module Pagination", () => {
       `/vaults/${vaultId}/contacts/${contactId}?focus=notes&source=Note:${targetNoteId}`,
     );
 
+    const targetRecord = page.locator(
+      `[data-source-record="Note:${targetNoteId}"]`,
+    );
+    await expect(targetRecord).toBeVisible({ timeout: 10000 });
     await expect(
       page
         .getByRole("navigation", { name: "Contact sections" })
         .getByRole("button", { name: "Notes and records", exact: true }),
     ).toHaveAttribute("aria-current", "location");
-
-    const targetRecord = page.locator(
-      `[data-source-record="Note:${targetNoteId}"]`,
-    );
-    await expect(targetRecord).toBeVisible({ timeout: 10000 });
     await expect(targetRecord).toContainText("Note 01");
     await expect
       .poll(async () =>
