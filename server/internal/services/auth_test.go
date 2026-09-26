@@ -290,3 +290,21 @@ func TestRefreshTokenDisabledUser(t *testing.T) {
 		t.Errorf("expected ErrUserDisabled, got %v", err)
 	}
 }
+
+func TestRefreshTokenWithoutAccountUsesHomeAccount(t *testing.T) {
+	db := testutil.SetupTestDB(t)
+	svc := NewAuthService(db, testutil.TestJWTConfig())
+	registered, err := svc.Register(dto.RegisterRequest{
+		FirstName: "Passkey", LastName: "User", Email: "passkey-home@example.com", Password: "password123",
+	}, "en")
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+	auth, err := svc.RefreshToken(&middleware.JWTClaims{UserID: registered.User.ID})
+	if err != nil {
+		t.Fatalf("WebAuthn token issuance failed: %v", err)
+	}
+	if auth.User.AccountID != registered.User.AccountID || auth.Token == "" {
+		t.Fatalf("expected authenticated home account %s, got %+v", registered.User.AccountID, auth.User)
+	}
+}

@@ -240,6 +240,12 @@ func (s *AuthService) RefreshToken(claims *middleware.JWTClaims) (*dto.AuthRespo
 	if user.Disabled {
 		return nil, ErrUserDisabled
 	}
+	// WebAuthn login starts without an account-scoped JWT. Issue its initial
+	// session for the user's home account; explicit account switches still
+	// preserve their selected account in subsequent token refreshes.
+	if claims.AccountID == "" {
+		return s.generateAuthResponse(&user)
+	}
 	return s.generateAuthResponseForAccount(&user, claims.AccountID)
 }
 
